@@ -16,7 +16,7 @@ Run it with the interpreter of the environment you test in, from the
 repository root, with the same `PYTHONPATH` the test suite needs. It is run on
 demand and never in CI; nothing in this directory is collected by pytest.
 
-For each mutant `run.py` copies `src/pathlib_next` to a temporary directory
+For each mutant `run.py` copies `src/sftppath` to a temporary directory
 (nothing under `src/` is written), applies the replacement there, and runs the
 named tests with the copy first on the import path. A pytest plugin
 (`mutation_check.py`) stops the run if the checkout was imported instead.
@@ -39,12 +39,12 @@ Append a call to `mutants.py`:
 
 ```python
 mutant(
-    "copy-onto-itself",                      # a unique id: what breaks, in words
-    "path.py",                               # relative to src/pathlib_next
-    "        if _same_file(src, target, identity=False):\n",   # exact text, once
-    "        if False:\n",                                      # its replacement
-    "tests/test_destructive_safety.py::test_copy_onto_itself_raises_and_keeps_content",
-    "copy() of a file onto itself is not refused",             # the note
+    "sftp-listing-keeps-unsafe-names",       # a unique id: what breaks, in words
+    "_path.py",                              # relative to src/sftppath
+    "            if not _providers.is_safe_child_name(name):\n",   # exact text, once
+    "            if False:\n",                                      # its replacement
+    "tests/test_sftp.py::test_a_hostile_listing_name_never_becomes_a_child",
+    "SFTPPath listing filter no-op",                                # the note
 )
 ```
 
