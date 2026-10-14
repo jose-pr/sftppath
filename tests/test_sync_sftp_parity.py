@@ -331,6 +331,11 @@ print(f.readline().decode().strip())
 """
 
 
+# The child exits holding the handle, so the loopback server's handler task may be
+# cancelled with the file still open on its side; that is the server, not the client.
+@pytest.mark.filterwarnings(
+    "ignore:Exception ignored while finalizing file:pytest.PytestUnraisableExceptionWarning"
+)
 def test_asyncssh_file_left_open_does_not_hang_interpreter_exit(
     flavor, sftp_server, fixture_tree, tmp_path
 ):
