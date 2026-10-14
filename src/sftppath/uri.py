@@ -27,7 +27,7 @@ from uripath import URI
 from uripath.schemes import DelegatingURIPath, URIPath
 from uripath.source import Source, fold_host, same_authority
 
-from ._base import BaseSFTPBackend
+from ._backend import BaseSFTPBackend
 from ._path import SFTPPath
 from ._rename import _REPLACING
 from ._select import _resolve_default_backend_cls

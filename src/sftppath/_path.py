@@ -17,7 +17,7 @@ from pathlib_next.providers import (
     copy_error_predicate,
 )
 
-from ._base import BaseSFTPBackend, SFTPEndpoint
+from ._backend import BaseSFTPBackend, SFTPEndpoint
 from ._exit import _track_unclosed
 from ._namespace import _namespace_of
 from ._rename import (

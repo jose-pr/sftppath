@@ -17,7 +17,7 @@ import threading as _thread
 import typing as _ty
 import weakref as _weakref
 
-from ._base import BaseSFTPBackend
+from ._backend import BaseSFTPBackend
 
 if _ty.TYPE_CHECKING:
     from ._path import SFTPPath

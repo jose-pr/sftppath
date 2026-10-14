@@ -11,7 +11,7 @@ from __future__ import annotations
 import importlib as _importlib
 import typing as _ty
 
-from ._base import DEFAULT_PORT, BaseSFTPBackend, SFTPEndpoint
+from ._backend import DEFAULT_PORT, BaseSFTPBackend, SFTPEndpoint
 from ._checkfile import CheckFileSFTPBackend
 from ._path import SFTPPath
 from ._sshconfig import DEFAULT_SSH_CONFIG

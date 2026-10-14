@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os as _os
 
-from ._base import BaseSFTPBackend
+from ._backend import BaseSFTPBackend
 
 _ENV_VAR = "SFTPPATH_BACKEND"
 _BACKEND_REGISTRY: "dict[str, type[BaseSFTPBackend]]" = {}

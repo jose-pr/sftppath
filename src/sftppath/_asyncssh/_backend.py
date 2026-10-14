@@ -7,7 +7,7 @@ import typing as _ty
 import asyncssh as _asyncssh
 
 from .. import _checkfile
-from .._base import SFTPEndpoint
+from .._backend import SFTPEndpoint
 from .._sshconfig import DEFAULT_SSH_CONFIG
 from . import _loop as _bridge
 from ._cache import _CACHE

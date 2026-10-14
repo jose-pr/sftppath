@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading as _threading
 import weakref as _weakref
 
-from ._base import BaseSFTPBackend
+from ._backend import BaseSFTPBackend
 
 
 class _Namespace:

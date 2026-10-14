@@ -13,7 +13,7 @@ from paramiko.sftp_attr import SFTPAttributes as _SFTPAttributes
 from pathlib_next import providers as _providers
 
 from . import _checkfile, _errors
-from ._base import DEFAULT_PORT, SFTPEndpoint
+from ._backend import DEFAULT_PORT, SFTPEndpoint
 from ._paramiko_config import _SSHConfig, _lookup_ssh_config
 
 # The sentinel and path normalization are paramiko-free and live in `_sshconfig`.
