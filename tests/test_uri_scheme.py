@@ -414,8 +414,6 @@ def test_rm_checks_the_policies_before_anything_is_sent(recursive, keyword):
 # --- text, copies, pickles ---------------------------------------------------------
 
 
-
-
 def test_a_path_with_userinfo_pickles_with_it_and_no_more():
     path = URIPath("sftp://user:S3CR3T-dummy@h/x")
     assert SECRET in pickle.dumps(path)  # the URI text itself carries it
