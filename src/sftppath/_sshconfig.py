@@ -1,8 +1,8 @@
 """Backend-agnostic SSH-config helpers (no paramiko/asyncssh import).
 
 The default-config sentinel and path normalization live here, separate from
-``_paramiko.py``, so the asyncssh backend and the scheme's ``__init__`` can
-reference them **without importing paramiko**. Only the actual config *parsing*
+``_paramiko.py``, so the asyncssh backend and the path class can reference them
+**without importing paramiko**. Only the actual config *parsing*
 (``_load_ssh_config``/``_lookup_ssh_config`` in ``_paramiko.py``) needs
 ``paramiko.SSHConfig``; the sentinel and the "which files" logic do not.
 """
@@ -45,7 +45,10 @@ def _find_sentinel(module: str, name: str) -> "_Sentinel":
 #: Sentinel meaning "use the default SSH config location(s)". Distinct from
 #: ``None`` (explicitly no config) and from any real path. Shared by both
 #: backends; kept paramiko-free on purpose (see module docstring).
-_DEFAULT_SSH_CONFIG = _Sentinel(__name__, "_DEFAULT_SSH_CONFIG")
+DEFAULT_SSH_CONFIG = _Sentinel(__name__, "DEFAULT_SSH_CONFIG")
+
+#: Sentinel for a keyword the caller did not give, where ``None`` is a value.
+UNSET = _Sentinel(__name__, "UNSET")
 
 # OpenSSH's own limit (readconf.c READCONF_MAX_DEPTH).
 _INCLUDE_MAX_DEPTH = 16
@@ -70,10 +73,10 @@ def _normalize_config_paths(
 ) -> "tuple[str, ...] | None":
     """Resolve an ``ssh_config`` argument to a tuple of file paths, or ``None``.
 
-    ``_DEFAULT_SSH_CONFIG`` -> the user's ``~/.ssh/config``; ``None`` -> no config;
+    ``DEFAULT_SSH_CONFIG`` -> the user's ``~/.ssh/config``; ``None`` -> no config;
     a str/path -> that one file; an iterable -> those files. No paramiko needed.
     """
-    if ssh_config is _DEFAULT_SSH_CONFIG:
+    if ssh_config is DEFAULT_SSH_CONFIG:
         return (str(_pathlib.Path.home() / ".ssh" / "config"),)
     if ssh_config is None:
         return None

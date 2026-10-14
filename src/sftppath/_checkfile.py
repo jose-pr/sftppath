@@ -6,7 +6,7 @@ cached per connection so it costs one request, not one per file.
 
 Everything but the wire call is shared: the request's fixed fields, the
 reply parser, the per-connection record of a refusal and the support probe.
-A backend subclasses `CheckFileSftpBackend` and implements
+A backend subclasses `CheckFileSFTPBackend` and implements
 `_check_file_request()` with its client library's own extended-request
 primitive. Neither SSH library is imported here."""
 
@@ -17,10 +17,10 @@ import threading as _thread
 import typing as _ty
 import weakref as _weakref
 
-from . import BaseSftpBackend
+from ._base import BaseSFTPBackend
 
 if _ty.TYPE_CHECKING:
-    from . import SftpPath
+    from ._path import SFTPPath
 
 #: The extended request's name.
 EXTENSION = "check-file-handle"
@@ -132,8 +132,8 @@ def parse_reply(payload: bytes, algorithm: str) -> str:
     return digest.hex()
 
 
-class CheckFileSftpBackend(BaseSftpBackend):
-    """A `BaseSftpBackend` whose `checksum()`/`supported_checksums()` speak
+class CheckFileSFTPBackend(BaseSFTPBackend):
+    """A `BaseSFTPBackend` whose `checksum()`/`supported_checksums()` speak
     `check-file-handle`. A subclass supplies `_check_file_request()`; the
     handle is opened (and always closed) through its client's paramiko-
     shaped `open()`."""
@@ -150,18 +150,18 @@ class CheckFileSftpBackend(BaseSftpBackend):
         `refused()` reads it."""
         raise NotImplementedError(EXTENSION)
 
-    def checksum(self, path: "SftpPath", algorithm: str) -> str:
+    def checksum(self, path: "SFTPPath", algorithm: str) -> str:
         """Server-side digest of `path` through `check-file-handle`. A server
         that answers "operation unsupported" for `algorithm` is not asked for
         it again on this connection (an OpenSSH server costs one request per
         algorithm, not one per file); other algorithms are still asked for.
         Other failures propagate as raised, and refuse nothing;
-        `SftpPath.checksum()` translates them to `NotImplementedError`."""
+        `SFTPPath.checksum()` translates them to `NotImplementedError`."""
         if algorithm not in DIGEST_SIZES:
             raise NotImplementedError(
                 f"{EXTENSION}: {algorithm!r} is not an algorithm the draft names"
             )
-        client = self.client(path.source)
+        client = self.client()
         record = _support(client)
         if algorithm in record.refused:
             raise NotImplementedError(
@@ -170,7 +170,7 @@ class CheckFileSftpBackend(BaseSftpBackend):
         # The extension hashes an *open handle*, not a bare path -- open
         # read-only and unbuffered (it is never read), and always close, so
         # an attempt never leaks a handle whether it succeeds or not.
-        file = client.open(path.path, "r", 0)
+        file = client.open(path._wirepath, "r", 0)
         try:
             try:
                 payload = self._check_file_request(client, file, algorithm)
@@ -184,7 +184,7 @@ class CheckFileSftpBackend(BaseSftpBackend):
         record.produced.add(algorithm)
         return digest
 
-    def supported_checksums(self, path: "SftpPath") -> "frozenset[str]":
+    def supported_checksums(self, path: "SFTPPath") -> "frozenset[str]":
         """Per-connection probe: try `checksum()` against `path` once and
         remember the answer for this connected client. `path` must already
         exist and be readable, or the probe's own `open()` fails for an
@@ -197,7 +197,7 @@ class CheckFileSftpBackend(BaseSftpBackend):
         set less the algorithms the server refused; before that it is empty,
         and `checksum()` still asks for any algorithm not refused.
         """
-        client = self.client(path.source)
+        client = self.client()
         record = _support(client)
         if not record.produced and not record.probed:
             if ALGORITHMS[0] not in record.refused:

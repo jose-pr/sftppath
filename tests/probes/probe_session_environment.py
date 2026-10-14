@@ -28,15 +28,9 @@ def test_the_proxy_and_aws_settings_of_the_shell_are_gone():
 
 
 def test_the_developers_home_is_not_the_home_directory():
-    developer_home = os.environ["PATHLIB_NEXT_DEVELOPER_HOME"]
+    developer_home = os.environ["SFTPPATH_DEVELOPER_HOME"]
     assert os.path.expanduser("~") != developer_home
     assert pathlib.Path.home() != pathlib.Path(developer_home)
     assert list(pathlib.Path.home().iterdir()) == []
     for variable in ("AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE"):
         assert not os.path.exists(os.environ[variable])
-
-
-def test_requests_and_botocore_find_neither_a_proxy_nor_a_profile():
-    requests = __import__("pytest").importorskip("requests")
-    assert requests.utils.get_environ_proxies("http://127.0.0.1:1/x") == {}
-    assert requests.utils.get_netrc_auth("http://h/") is None

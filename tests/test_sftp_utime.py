@@ -1,63 +1,30 @@
-"""`SftpPath` sets the access and modification time of a file through the
-SFTP attributes request, on both client libraries, so `touch()` moves an
-existing file's time and a sync can leave its copies with their source's time.
-Every test reads the server's own file system afterwards."""
+"""`SFTPPath` and `SFTPURIPath` set the access and modification time of a file
+through the SFTP attributes request, on both client libraries, so `touch()`
+moves an existing file's time and a sync can leave its copies with their
+source's time. Every test reads the server's own file system afterwards."""
 
 import os
-import threading
 
 import pytest
 
 pytest.importorskip("asyncssh")
 
 from pathlib_next import LocalPath  # noqa: E402
-from pathlib_next.uri.schemes.sftp import SftpPath  # noqa: E402
-from pathlib_next.uri.schemes.sftp import _asyncssh as backend_mod  # noqa: E402
 from pathlib_next.sync import PathSyncer, SyncEvent  # noqa: E402
+from sftp_support import make_backend, make_path  # noqa: E402
 
-try:
-    import paramiko
-except ImportError:  # asyncssh-only install
-    paramiko = None
+from sftppath import SFTPPath  # noqa: E402
 
 #: 2001-09-09 01:46:40 UTC.
 OLD = 1_000_000_000
 
 
-def _make_backend(kind):
-    if kind == "paramiko":
-        if paramiko is None:
-            pytest.skip("paramiko not installed")
-        from pathlib_next.uri.schemes.sftp import SftpBackend
-
-        return SftpBackend({"allow_agent": False, "look_for_keys": False})
-    return backend_mod.AsyncsshSftpBackend()
-
-
-def _close(backend, path):
-    if paramiko is not None and not isinstance(
-        backend, backend_mod.AsyncsshSftpBackend
-    ):
-        from pathlib_next.uri.schemes.sftp._paramiko import _CACHED_CLIENTS
-
-        try:
-            backend.client(path.source).sock.get_transport().close()
-        except Exception:
-            pass
-        _CACHED_CLIENTS.invalidate(backend, path.source, threading.get_ident())
-    else:
-        backend.close()
-
-
-@pytest.fixture(params=["paramiko", "asyncssh"])
-def remote(request, sftp_server, fixture_tree):
-    """(SftpPath at the server root, local path of that root)."""
-    backend = _make_backend(request.param)
-    root = SftpPath(sftp_server, backend=backend)
-    try:
-        yield root, fixture_tree
-    finally:
-        _close(backend, root)
+@pytest.fixture
+def remote(kind, flavor, sftp_server, fixture_tree, backends):
+    """(path at the server root, local path of that root)."""
+    backend = make_backend(kind, sftp_server)
+    backends.append(backend)
+    return make_path(flavor, sftp_server, backend), fixture_tree
 
 
 def test_touch_moves_the_time_of_an_existing_remote_file(remote):
@@ -93,26 +60,27 @@ def test_utime_of_a_missing_file_raises_file_not_found(remote):
 
 
 class Reads:
-    """The files `SftpPath` opened for reading."""
+    """The files an `SFTPPath` opened for reading, by name: an `SFTPURIPath`
+    reads through the `SFTPPath` it delegates to."""
 
-    def __init__(self, monkeypatch):
+    def __init__(self, monkeypatch, remote_class):
         self.opened = []
-        real = SftpPath._open
+        real = SFTPPath._open
 
         def spy(path, mode="r", buffering=-1):
             if mode.startswith("r"):
                 self.opened.append(path.name)
             return real(path, mode, buffering)
 
-        monkeypatch.setattr(SftpPath, "_open", spy)
+        monkeypatch.setattr(SFTPPath, "_open", spy)
         # The loopback server counts as this machine: a quick check is for
         # pairs with a remote side.
-        monkeypatch.setattr(SftpPath, "is_local", lambda path: False)
+        monkeypatch.setattr(remote_class, "is_local", lambda path: False, raising=False)
 
 
 @pytest.fixture
-def reads(monkeypatch):
-    return Reads(monkeypatch)
+def reads(monkeypatch, remote):
+    return Reads(monkeypatch, type(remote[0]))
 
 
 def _source(tmp_path, mtime=OLD + 0.75):

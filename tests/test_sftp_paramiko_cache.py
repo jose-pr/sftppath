@@ -6,12 +6,12 @@ import threading
 
 import pytest
 
-paramiko = pytest.importorskip("paramiko")
+pytest.importorskip("paramiko")
 pytest.importorskip("asyncssh")
 
-from pathlib_next.uri.schemes import sftp as sftp_pkg  # noqa: E402
-from pathlib_next.uri.schemes.sftp import SftpPath  # noqa: E402
-from pathlib_next.uri.schemes.sftp import _paramiko  # noqa: E402
+from sftp_support import make_backend  # noqa: E402
+
+from sftppath import _paramiko  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -25,34 +25,27 @@ def home(tmp_path, monkeypatch):
 
 
 def test_a_connection_of_a_thread_that_ended_is_closed_by_the_next_new_one(
-    sftp_root, sftp_loopback
+    sftp_root, sftp_loopback, backends
 ):
     (sftp_root / "a.txt").write_bytes(b"a")
-    backend = sftp_pkg.SftpBackend(
-        {"allow_agent": False, "look_for_keys": False},
-        paramiko.AutoAddPolicy(),
-        ssh_config=None,
-        known_hosts=None,
-    )
-    try:
-        source = SftpPath(sftp_loopback.url("a.txt")).source
-        clients = []
-        worker = threading.Thread(target=lambda: clients.append(backend.client(source)))
-        worker.start()
-        worker.join()
-        (stale,) = clients
-        assert stale.sock.get_transport().is_active()
+    backend = make_backend("paramiko", sftp_loopback)
+    backends.append(backend)
 
-        # A new connection (this thread had none) sweeps up the dead thread's.
-        fresh = backend.client(source)
+    clients = []
+    worker = threading.Thread(target=lambda: clients.append(backend.client()))
+    worker.start()
+    worker.join()
+    (stale,) = clients
+    assert stale.sock.get_transport().is_active()
 
-        assert not stale.sock.get_transport().is_active()
-        assert [
-            key[2] for key in _paramiko._CACHED_CLIENTS.cache if key[0] is backend
-        ] == [threading.get_ident()]
-        assert backend.client(source) is fresh
-    finally:
-        backend.close()
+    # A new connection (this thread had none) sweeps up the dead thread's.
+    fresh = backend.client()
+
+    assert not stale.sock.get_transport().is_active()
+    assert [key[1] for key in _paramiko._CACHED_CLIENTS.cache if key[0] is backend] == [
+        threading.get_ident()
+    ]
+    assert backend.client() is fresh
 
 
 def test_a_changed_ssh_config_file_is_read_again(tmp_path):

@@ -1,20 +1,16 @@
-"""An `sftp:` file is written through as the stream is used: the server opens
-(and truncates) the file when `open()` returns, and a `with` block that raised
-leaves what was written, as a local file does. Nothing is held back for `close()`
-to commit, so `discard()` has no meaning for it."""
+"""An SFTP file is written through as the stream is used: the server opens (and
+truncates) the file when `open()` returns, and a `with` block that raised leaves
+what was written, as a local file does. Nothing is held back for `close()` to
+commit, so there is nothing for a discard to undo.
+
+Run on both backends and both path flavors against the loopback server.
+"""
 
 import pytest
 
-asyncssh = pytest.importorskip("asyncssh")
+pytest.importorskip("asyncssh")
 
-from pathlib_next.uri.schemes import sftp as sftp_pkg  # noqa: E402
-from pathlib_next.uri.schemes.sftp import SftpPath  # noqa: E402
-from pathlib_next.uri.schemes.sftp import _asyncssh as backend_mod  # noqa: E402
-
-try:
-    import paramiko
-except ImportError:  # asyncssh-only install
-    paramiko = None
+from sftp_support import make_backend, make_path  # noqa: E402
 
 
 class Abort(Exception):
@@ -30,30 +26,17 @@ def home(tmp_path, monkeypatch):
     return home
 
 
-@pytest.fixture(params=["paramiko", "asyncssh"])
-def backend(request):
-    if request.param == "paramiko":
-        if paramiko is None:
-            pytest.skip("paramiko not installed")
-        backend = sftp_pkg.SftpBackend(
-            {"allow_agent": False, "look_for_keys": False},
-            paramiko.AutoAddPolicy(),
-            ssh_config=None,
-            known_hosts=None,
-        )
-    else:
-        backend = backend_mod.AsyncsshSftpBackend(
-            {"known_hosts": None}, ssh_config=None
-        )
-    yield backend
-    backend.close()
+@pytest.fixture
+def path_at(flavor, kind, sftp_loopback, backends):
+    """`path_at(name)`: the path `name` below the served root."""
+    backend = make_backend(kind, sftp_loopback)
+    backends.append(backend)
+    return lambda name: make_path(flavor, sftp_loopback, backend, name)
 
 
-def test_the_file_is_truncated_when_the_stream_is_opened(
-    sftp_loopback, sftp_root, backend
-):
+def test_the_file_is_truncated_when_the_stream_is_opened(sftp_root, path_at):
     (sftp_root / "f.bin").write_bytes(b"OLD CONTENT")
-    stream = SftpPath(sftp_loopback.url("f.bin"), backend=backend).open("wb")
+    stream = path_at("f.bin").open("wb")
     try:
         assert (sftp_root / "f.bin").read_bytes() == b""
     finally:
@@ -61,11 +44,9 @@ def test_the_file_is_truncated_when_the_stream_is_opened(
 
 
 @pytest.mark.parametrize("mode, data", [("wb", b"part"), ("w", "part")])
-def test_a_block_that_raised_leaves_what_was_written(
-    sftp_loopback, sftp_root, backend, mode, data
-):
+def test_a_block_that_raised_leaves_what_was_written(sftp_root, path_at, mode, data):
     (sftp_root / "f.bin").write_bytes(b"OLD CONTENT")
-    path = SftpPath(sftp_loopback.url("f.bin"), backend=backend)
+    path = path_at("f.bin")
     with pytest.raises(Abort):
         with path.open(mode) as f:
             f.write(data)

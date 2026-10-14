@@ -2,32 +2,39 @@
 server that counts every request and can fail or reshape any of them.
 
 What a failed, interrupted or refused operation leaves behind must not depend
-on which backend ran it, so the scenarios run on both backends and compare
-what the server holds afterwards. The asyncssh-only tests pin that a call
-which has raised has stopped: the server's request counter does not move after
-the exception reached the caller.
+on which backend ran it, so the scenarios run on both backends, through an
+`SFTPPath` and through an `SFTPURIPath`, and compare what the server holds
+afterwards. The asyncssh-only tests pin that a call which has raised has
+stopped: the server's request counter does not move after the exception
+reached the caller.
 """
+
+from __future__ import annotations
 
 import asyncio
 import collections
 import concurrent.futures
 import gc
 import logging
+import os
 import threading
 import time
 from types import SimpleNamespace
 
 import pytest
 
+from sftp_support import make_backend, make_path
+
 asyncssh = pytest.importorskip("asyncssh")
 
-from pathlib_next.uri.schemes.sftp import SftpPath  # noqa: E402
-from pathlib_next.uri.schemes.sftp import _asyncssh as backend_mod  # noqa: E402
+from sftppath import SFTPPath  # noqa: E402
+from sftppath._asyncssh import _backend as backend_mod  # noqa: E402
+from sftppath._asyncssh import _loop, _walk  # noqa: E402
 
 try:
-    import paramiko
-except ImportError:  # asyncssh-only install
-    paramiko = None
+    from sftppath.uri import SFTPURIPath
+except ImportError:  # uripath is not installed
+    SFTPURIPath = None
 
 #: Seconds to wait after a call has raised before the server's request counter
 #: is read again. A walk that kept running after the exception issues hundreds
@@ -50,38 +57,17 @@ def home(tmp_path, monkeypatch):
     return home
 
 
-@pytest.fixture
-def backends():
-    opened = []
-    yield opened
-    for backend in opened:
-        backend.close()
-
-
-def _backend(kind, backends, **kwargs):
-    if kind == "paramiko":
-        if paramiko is None:
-            pytest.skip("paramiko not installed")
-        from pathlib_next.uri.schemes.sftp import SftpBackend
-
-        backend = SftpBackend(
-            {"allow_agent": False, "look_for_keys": False},
-            paramiko.AutoAddPolicy(),
-            known_hosts=None,
-        )
-    else:
-        backend = backend_mod.AsyncsshSftpBackend({"known_hosts": None}, **kwargs)
+def _paths(kind, flavor, server, backends, **backend_kwargs):
+    """`at(rel)`: the path `rel` below the root of `server`, of the given
+    flavor, over one backend of `kind` that is closed when the test ends."""
+    backend = make_backend(kind, server, **backend_kwargs)
     backends.append(backend)
-    return backend
 
+    def at(rel=""):
+        return make_path(flavor, server, backend, rel)
 
-@pytest.fixture(params=["paramiko", "asyncssh"])
-def kind(request):
-    return request.param
-
-
-def _path(sftp_loopback, backend, rel=""):
-    return SftpPath(sftp_loopback.url(rel), backend=backend)
+    at.backend = backend
+    return at
 
 
 def _body(name):
@@ -122,7 +108,7 @@ def _deny(match, nth=1, *, onward=False, error=asyncssh.SFTPPermissionDenied):
     (and every later one with `onward`)."""
     state = {"seen": 0}
 
-    def hook(sftp_loopback, path, *args):
+    def hook(server, path, *args):
         if match(path):
             state["seen"] += 1
             if state["seen"] == nth or (onward and state["seen"] > nth):
@@ -144,9 +130,7 @@ class _Sent:
 
         # The client's handler only: the in-process server's replies go
         # through the same base method.
-        monkeypatch.setattr(
-            asyncssh.sftp.SFTPClientHandler, "send_packet", recording, raising=False
-        )
+        monkeypatch.setattr(asyncssh.sftp.SFTPClientHandler, "send_packet", recording)
 
     def after(self, moment):
         return sum(1 for sent in self.times if sent > moment)
@@ -157,9 +141,27 @@ def sent(monkeypatch):
     return _Sent(monkeypatch)
 
 
+def _walk_tasks():
+    """The coroutines of the tree walks that are still alive on the bridge
+    loop."""
+
+    async def names():
+        found = []
+        for task in asyncio.all_tasks():
+            name = getattr(task.get_coro(), "__qualname__", "")
+            if "_concurrent_" in name:
+                found.append(name)
+        return found
+
+    return _loop._run(names(), 10)
+
+
 def _assert_stopped(sftp_wire, sent, raised_at):
-    """Nothing was sent to the server after `raised_at`, and the server's
-    counter moves by no more than the requests that were already in flight."""
+    """No walk is left on the bridge loop, nothing was sent to the server after
+    `raised_at`, and the server's counter moves by no more than the requests
+    that were already in flight. The wait before the counter is read is for a
+    walk that did not stop: it would send more within it."""
+    assert _walk_tasks() == []
     at_raise = sftp_wire.total()
     time.sleep(_SETTLE)
     assert sent.after(raised_at) == 0
@@ -185,22 +187,34 @@ def _interrupt_first_unbounded_wait(monkeypatch, after):
     monkeypatch.setattr(concurrent.futures.Future, "result", result)
 
 
+def _slow(seconds):
+    """A `wire.before` hook that holds the server's loop for `seconds`: the
+    server answers no faster than one request per `seconds`, so a walk of
+    hundreds of requests is still running when a bound of a second or two
+    passes."""
+
+    def hook(server, *args):
+        time.sleep(seconds)
+
+    return hook
+
+
 # --- a call that has raised has stopped --------------------------------------
 
 
 def test_copy_that_raised_sends_no_further_request(
-    sftp_loopback, sftp_root, sftp_wire, backends, sent
+    flavor, sftp_loopback, sftp_root, sftp_wire, backends, sent
 ):
     expected = _make_tree(sftp_root / "src")
     (sftp_root / "dst").mkdir()
     (sftp_root / "dst" / "untouched.txt").write_text("kept")
-    backend = _backend("asyncssh", backends)
-    src = _path(sftp_loopback, backend, "src")
+    at = _paths("asyncssh", flavor, sftp_loopback, backends)
+    src = at("src")
     src.exists()
     sftp_wire.before["open"] = _deny(lambda p: b"/src/" in p, nth=40)
 
     with pytest.raises(PermissionError):
-        src.copy(_path(sftp_loopback, backend, "dst"), recursive=True, overwrite=True)
+        src.copy(at("dst"), recursive=True, overwrite=True)
     raised_at = time.perf_counter()
 
     _assert_stopped(sftp_wire, sent, raised_at)
@@ -215,17 +229,17 @@ def test_copy_that_raised_sends_no_further_request(
 
 
 def test_rm_that_raised_sends_no_further_request(
-    sftp_loopback, sftp_root, sftp_wire, backends, sent
+    flavor, sftp_loopback, sftp_root, sftp_wire, backends, sent
 ):
     _make_tree(sftp_root / "tree")
-    backend = _backend("asyncssh", backends)
-    tree = _path(sftp_loopback, backend, "tree")
+    at = _paths("asyncssh", flavor, sftp_loopback, backends)
+    tree = at("tree")
     tree.exists()
     denied = _deny(lambda p: p.endswith(b".bin"), nth=20)
 
-    def slow_remove(server_, path, *args):
+    def slow_remove(server, path, *args):
         time.sleep(0.002)
-        denied(server_, path, *args)
+        denied(server, path, *args)
 
     sftp_wire.before["remove"] = slow_remove
 
@@ -239,17 +253,17 @@ def test_rm_that_raised_sends_no_further_request(
 
 
 def test_rm_with_a_handler_that_declines_stops_at_the_first_error(
-    sftp_loopback, sftp_root, sftp_wire, backends, sent
+    flavor, sftp_loopback, sftp_root, sftp_wire, backends, sent
 ):
     _make_tree(sftp_root / "tree")
-    backend = _backend("asyncssh", backends)
-    tree = _path(sftp_loopback, backend, "tree")
+    at = _paths("asyncssh", flavor, sftp_loopback, backends)
+    tree = at("tree")
     tree.exists()
     denied = _deny(lambda p: p.endswith(b".bin"), nth=20)
 
-    def slow_remove(server_, path, *args):
+    def slow_remove(server, path, *args):
         time.sleep(0.002)
-        denied(server_, path, *args)
+        denied(server, path, *args)
 
     sftp_wire.before["remove"] = slow_remove
 
@@ -267,18 +281,17 @@ def test_walk_that_timed_out_has_stopped(
 ):
     _make_tree(sftp_root / "tree")
     total = _entries(sftp_root / "tree")
-    backend = _backend("asyncssh", backends)
-    tree = _path(sftp_loopback, backend, "tree")
+    backend = make_backend("asyncssh", sftp_loopback)
+    backends.append(backend)
+    tree = SFTPPath("/tree", backend=backend)
     aclient = tree._sftpclient._aclient
-
-    def slow_remove(server_, path, *args):
-        time.sleep(0.01)
-
-    sftp_wire.before["remove"] = slow_remove
+    # 480 file removals, one every 10 ms at the quickest: more than the bound
+    # below.
+    sftp_wire.before["remove"] = _slow(0.01)
 
     with pytest.raises(TimeoutError):
-        backend_mod._run(
-            backend_mod._concurrent_rm(
+        _loop._run(
+            _walk._concurrent_rm(
                 tree,
                 max_concurrency=16,
                 missing_ok=False,
@@ -289,8 +302,6 @@ def test_walk_that_timed_out_has_stopped(
         )
     raised_at = time.perf_counter()
 
-    # How far the walk got before the timeout depends on the machine; that
-    # it did not finish does not.
     left = _entries(sftp_root / "tree")
     assert 0 < left <= total
     _assert_stopped(sftp_wire, sent, raised_at)
@@ -302,20 +313,19 @@ def test_copy_that_timed_out_has_stopped_and_left_no_partial_file(
 ):
     expected = _make_tree(sftp_root / "src")
     (sftp_root / "dst").mkdir()
-    backend = _backend("asyncssh", backends)
-    src = _path(sftp_loopback, backend, "src")
+    backend = make_backend("asyncssh", sftp_loopback)
+    backends.append(backend)
+    src = SFTPPath("/src", backend=backend)
     aclient = src._sftpclient._aclient
-
-    def slow_write(server_, *args):
-        time.sleep(0.01)
-
-    sftp_wire.before["write"] = slow_write
+    # 480 writes, one every 10 ms at the quickest: more than the bound
+    # below.
+    sftp_wire.before["write"] = _slow(0.01)
 
     with pytest.raises(TimeoutError):
-        backend_mod._run(
-            backend_mod._concurrent_copy(
+        _loop._run(
+            _walk._concurrent_copy(
                 src,
-                _path(sftp_loopback, backend, "dst"),
+                SFTPPath("/dst", backend=backend),
                 overwrite=False,
                 follow_symlinks=True,
                 preserve_metadata=False,
@@ -328,8 +338,7 @@ def test_copy_that_timed_out_has_stopped_and_left_no_partial_file(
     raised_at = time.perf_counter()
 
     _assert_stopped(sftp_wire, sent, raised_at)
-    # How many files were finished before the timeout depends on the machine;
-    # each one that is there is whole.
+    # Each file that is there is whole.
     copied = _files(sftp_root / "dst")
     assert len(copied) < len(expected)
     for name, content in copied.items():
@@ -338,22 +347,21 @@ def test_copy_that_timed_out_has_stopped_and_left_no_partial_file(
 
 @pytest.mark.parametrize("operation", ["copy", "rm"])
 def test_walk_interrupted_in_the_calling_thread_has_stopped(
-    operation, sftp_loopback, sftp_root, sftp_wire, backends, monkeypatch, sent
+    operation, flavor, sftp_loopback, sftp_root, sftp_wire, backends, monkeypatch, sent
 ):
     expected = _make_tree(sftp_root / "src")
-    backend = _backend("asyncssh", backends)
-    src = _path(sftp_loopback, backend, "src")
+    at = _paths("asyncssh", flavor, sftp_loopback, backends)
+    src = at("src")
     src.exists()
-
-    def slow(server_, *args):
-        time.sleep(0.01)
-
-    sftp_wire.before["write" if operation == "copy" else "remove"] = slow
+    # Every write (copy) or removal (rm) takes the server 10 ms at the
+    # quickest, and there are hundreds: the walk is under way when the
+    # interrupt arrives.
+    sftp_wire.before["write" if operation == "copy" else "remove"] = _slow(0.01)
     _interrupt_first_unbounded_wait(monkeypatch, after=0.5)
 
     with pytest.raises(KeyboardInterrupt):
         if operation == "copy":
-            src.copy(_path(sftp_loopback, backend, "dst"), recursive=True)
+            src.copy(at("dst"), recursive=True)
         else:
             src.rm(recursive=True)
     raised_at = time.perf_counter()
@@ -369,17 +377,17 @@ def test_walk_interrupted_in_the_calling_thread_has_stopped(
 
 
 def test_failures_behind_the_raised_one_are_not_left_unretrieved(
-    sftp_loopback, sftp_root, sftp_wire, backends, caplog
+    flavor, sftp_loopback, sftp_root, sftp_wire, backends, caplog
 ):
     _make_tree(sftp_root / "src")
-    backend = _backend("asyncssh", backends)
-    src = _path(sftp_loopback, backend, "src")
+    at = _paths("asyncssh", flavor, sftp_loopback, backends)
+    src = at("src")
     src.exists()
     sftp_wire.before["open"] = _deny(lambda p: b"/src/" in p, nth=30, onward=True)
 
     with caplog.at_level(logging.ERROR, logger="asyncio"):
         with pytest.raises(PermissionError):
-            src.copy(_path(sftp_loopback, backend, "dst"), recursive=True)
+            src.copy(at("dst"), recursive=True)
         time.sleep(0.3)
         gc.collect()
 
@@ -411,7 +419,7 @@ def test_run_waits_for_a_cancelled_coroutine_to_unwind_after_an_interrupt(
     _interrupt_first_unbounded_wait(monkeypatch, after=0.1)
 
     with pytest.raises(KeyboardInterrupt):
-        backend_mod._run(stalled(), None)
+        _loop._run(stalled(), None)
     assert unwound.is_set()
 
 
@@ -427,7 +435,7 @@ def test_run_waits_for_a_cancelled_coroutine_to_unwind_after_a_timeout():
             raise
 
     with pytest.raises(TimeoutError):
-        backend_mod._run(stalled(), 0.1)
+        _loop._run(stalled(), 0.1)
     assert unwound.is_set()
 
 
@@ -438,9 +446,9 @@ def test_run_returns_what_the_coroutine_returns_and_raises_what_it_raises():
     async def refuse():
         raise PermissionError("no")
 
-    assert backend_mod._run(answer(), 5) == 42
+    assert _loop._run(answer(), 5) == 42
     with pytest.raises(PermissionError):
-        backend_mod._run(refuse(), 5)
+        _loop._run(refuse(), 5)
 
 
 # --- cancellation inside the walk --------------------------------------------------
@@ -500,12 +508,17 @@ class _SlowOpenClient:
 
 
 class _FakePath:
+    """What the walks read of a path: `_wirepath`, `name` and `/`."""
+
     def __init__(self, path):
-        self.path = path
+        self._wirepath = path
         self.name = path.rsplit("/", 1)[1]
 
     def __truediv__(self, name):
-        return _FakePath(f"{self.path}/{name}")
+        return _FakePath(f"{self._wirepath}/{name}")
+
+    def __str__(self):
+        return self._wirepath
 
 
 def test_cancelled_open_of_a_destination_is_completed_then_undone():
@@ -514,7 +527,7 @@ def test_cancelled_open_of_a_destination_is_completed_then_undone():
         client.release = asyncio.Event()
         client.requested = asyncio.Event()
         walk = asyncio.ensure_future(
-            backend_mod._concurrent_copy(
+            _walk._concurrent_copy(
                 _FakePath("/src"),
                 _FakePath("/dst"),
                 overwrite=False,
@@ -539,6 +552,78 @@ def test_cancelled_open_of_a_destination_is_completed_then_undone():
     assert client.removed == ["/dst/a.txt"]
 
 
+def test_failures_that_finish_with_the_raised_one_are_retrieved_by_the_walk():
+    class _Refusing(_SlowOpenClient):
+        """Five children whose destination opens are all refused at once."""
+
+        count = 5
+
+        def __init__(self):
+            super().__init__()
+            self.waiting = 0
+
+        async def stat(self, path):
+            if path == "/src":
+                return asyncssh.SFTPAttrs(permissions=0o40755)
+            if path.startswith("/src/"):
+                return asyncssh.SFTPAttrs(permissions=0o100644)
+            raise asyncssh.SFTPNoSuchFile(path)
+
+        lstat = stat
+
+        async def readdir(self, path):
+            return [SimpleNamespace(filename=f"{n}.txt") for n in range(self.count)]
+
+        async def open(self, path, mode, encoding=None):
+            if not path.startswith("/dst/"):
+                return _Handle(self, path, mode)
+            self.waiting += 1
+            if self.waiting == self.count:
+                self.requested.set()
+            await self.release.wait()
+            raise asyncssh.SFTPPermissionDenied("refused by the test")
+
+    async def scenario():
+        unhandled = []
+        asyncio.get_running_loop().set_exception_handler(
+            lambda loop, context: unhandled.append(context)
+        )
+        client = _Refusing()
+        client.release = asyncio.Event()
+        client.requested = asyncio.Event()
+        walk = asyncio.ensure_future(
+            _walk._concurrent_copy(
+                _FakePath("/src"),
+                _FakePath("/dst"),
+                overwrite=False,
+                follow_symlinks=True,
+                preserve_metadata=False,
+                max_concurrency=8,
+                ignore_error=None,
+                aclient=client,
+            )
+        )
+        await client.requested.wait()
+        client.release.set()
+        raised = False
+        try:
+            await walk
+        except PermissionError:
+            raised = True
+        # The walk and its callbacks are let go, then the tasks are collected:
+        # a task that is collected still holding a failure nobody read is
+        # reported to the loop's exception handler.
+        del walk
+        for _ in range(3):
+            await asyncio.sleep(0)
+        gc.collect()
+        return raised, unhandled
+
+    raised, unhandled = asyncio.run(scenario())
+    assert raised
+    assert unhandled == []
+
+
 def test_cancelled_walk_waits_for_a_running_error_handler():
     handled = threading.Event()
     started = threading.Event()
@@ -556,7 +641,7 @@ def test_cancelled_walk_waits_for_a_running_error_handler():
 
     async def scenario():
         walk = asyncio.ensure_future(
-            backend_mod._concurrent_copy(
+            _walk._concurrent_copy(
                 _FakePath("/src"),
                 _FakePath("/dst"),
                 overwrite=False,
@@ -605,63 +690,46 @@ def _native(kind, calls, name, times=1):
 
 
 def test_unreadable_source_leaves_the_existing_destination_intact(
-    kind, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
+    kind, flavor, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
 ):
     (sftp_root / "src").mkdir()
     (sftp_root / "src" / "keep.txt").write_bytes(b"new")
     (sftp_root / "dst").mkdir()
     (sftp_root / "dst" / "keep.txt").write_bytes(b"PRECIOUS OLD CONTENT")
-    backend = _backend(kind, backends)
+    at = _paths(kind, flavor, sftp_loopback, backends)
     sftp_wire.before["open"] = _deny(lambda p: p.endswith(b"/src/keep.txt"))
 
     with pytest.raises(PermissionError):
-        _path(sftp_loopback, backend, "src").copy(
-            _path(sftp_loopback, backend, "dst"), recursive=True, overwrite=True
-        )
+        at("src").copy(at("dst"), recursive=True, overwrite=True)
 
     assert _files(sftp_root / "dst") == {"keep.txt": b"PRECIOUS OLD CONTENT"}
     _native(kind, native_calls, "_concurrent_copy")
 
 
 def test_a_copy_that_fails_while_reading_leaves_no_file_behind(
-    kind, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
+    kind, flavor, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
 ):
     (sftp_root / "src").mkdir()
     (sftp_root / "src" / "big.bin").write_bytes(b"x" * 3_000_000)
-    backend = _backend(kind, backends)
+    at = _paths(kind, flavor, sftp_loopback, backends)
     reads = [0]
+    failed = []
 
-    def fail_second_read(server_, *args):
+    def fail_second_read(server, *args):
         reads[0] += 1
         if reads[0] == 2:
+            failed.append(True)
             raise asyncssh.SFTPFailure("failed by the test")
 
     sftp_wire.before["read"] = fail_second_read
 
     with pytest.raises(OSError) as raised:
-        _path(sftp_loopback, backend, "src").copy(
-            _path(sftp_loopback, backend, "dst"), recursive=True
-        )
+        at("src").copy(at("dst"), recursive=True)
 
     assert not isinstance(raised.value, FileExistsError)
-    assert reads[0] >= 2
+    assert failed == [True]
     assert _files(sftp_root / "dst") == {}
     _native(kind, native_calls, "_concurrent_copy")
-
-
-def test_two_backends_for_one_host_copy_without_the_native_walk(
-    kind, sftp_loopback, sftp_root, backends, native_calls
-):
-    (sftp_root / "tree").mkdir()
-    (sftp_root / "tree" / "f.txt").write_bytes(b"content")
-    source = _path(sftp_loopback, _backend(kind, backends), "tree")
-    target = _path(sftp_loopback, _backend(kind, backends), "out")
-    assert not source._same_filesystem(target)
-
-    source.copy(target, recursive=True)
-
-    assert _files(sftp_root / "out") == {"f.txt": b"content"}
-    assert native_calls["_concurrent_copy"] == 0
 
 
 def _chain(sftp_root):
@@ -673,41 +741,46 @@ def _chain(sftp_root):
 
 
 def test_error_the_handler_declined_is_offered_once(
-    kind, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
+    kind, flavor, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
 ):
     _chain(sftp_root)
-    backend = _backend(kind, backends)
+    at = _paths(kind, flavor, sftp_loopback, backends)
     sftp_wire.before["remove"] = _deny(lambda p: p.endswith(b"locked.txt"))
     offered = []
 
     def decline(error, path):
-        offered.append((type(error).__name__, path.name))
+        offered.append((type(error).__name__, path.name, type(path)))
         return False
 
+    tree = at("tree")
     with pytest.raises(PermissionError):
-        _path(sftp_loopback, backend, "tree").rm(recursive=True, ignore_error=decline)
+        tree.rm(recursive=True, ignore_error=decline)
 
-    assert offered == [("PermissionError", "locked.txt")]
+    # The handler is given the paths of the flavor the call was made on.
+    assert offered == [("PermissionError", "locked.txt", type(tree))]
     assert (sftp_root / "tree" / "a" / "b" / "c" / "locked.txt").exists()
     _native(kind, native_calls, "_concurrent_rm")
 
 
 def test_errors_the_handler_swallows_are_offered_one_by_one(
-    kind, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
+    kind, flavor, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
 ):
     _chain(sftp_root)
-    backend = _backend(kind, backends)
+    at = _paths(kind, flavor, sftp_loopback, backends)
     sftp_wire.before["remove"] = _deny(lambda p: p.endswith(b"locked.txt"))
     offered = []
 
     def swallow(error, path):
-        offered.append(path.name)
+        offered.append((path.name, type(path)))
         return True
 
-    _path(sftp_loopback, backend, "tree").rm(recursive=True, ignore_error=swallow)
+    tree = at("tree")
+    tree.rm(recursive=True, ignore_error=swallow)
 
     # The file, then each directory above it that could not be removed.
-    assert offered == ["locked.txt", "c", "b", "a", "tree"]
+    assert offered == [
+        (name, type(tree)) for name in ("locked.txt", "c", "b", "a", "tree")
+    ]
     assert (sftp_root / "tree" / "a" / "b" / "c" / "locked.txt").exists()
     _native(kind, native_calls, "_concurrent_rm")
 
@@ -728,27 +801,26 @@ def _copy_tree(sftp_root):
 
 @pytest.mark.parametrize("decision", ["swallow", "decline", "raise"])
 def test_copy_on_error_decides_each_failing_child_once(
-    decision, kind, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
+    decision, kind, flavor, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
 ):
     _copy_tree(sftp_root)
-    backend = _backend(kind, backends)
+    at = _paths(kind, flavor, sftp_loopback, backends)
     sftp_wire.before["open"] = _deny(
         lambda p: p.endswith(b"/dst/a/b/c/locked.txt"), onward=True
     )
     offered = []
 
     def predicate(error, path):
-        offered.append((type(error).__name__, path.name, type(path).__name__))
+        offered.append((type(error).__name__, path.name, type(path)))
         if decision == "raise":
             raise _Stop()
         return decision == "swallow"
 
-    copy = lambda: _path(sftp_loopback, backend, "src").copy(  # noqa: E731
-        _path(sftp_loopback, backend, "dst"),
-        recursive=True,
-        overwrite=True,
-        on_error=predicate,
-    )
+    src = at("src")
+
+    def copy():
+        src.copy(at("dst"), recursive=True, overwrite=True, on_error=predicate)
+
     if decision == "swallow":
         copy()
         assert _files(sftp_root / "dst") == {"a/b/c/fine.txt": b"fine"}
@@ -757,17 +829,18 @@ def test_copy_on_error_decides_each_failing_child_once(
             copy()
 
     # The source child that failed, offered once, whatever the directories
-    # above it did with the error.
-    assert offered == [("PermissionError", "locked.txt", "SftpPath")]
+    # above it did with the error; the path is of the flavor the call was
+    # made on.
+    assert offered == [("PermissionError", "locked.txt", type(src))]
     _native(kind, native_calls, "_concurrent_copy")
 
 
 def test_copy_that_declines_an_error_stops_after_the_children_already_running(
-    kind, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
+    kind, flavor, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
 ):
     expected = _make_tree(sftp_root / "src")
     (sftp_root / "dst").mkdir()
-    backend = _backend(kind, backends)
+    at = _paths(kind, flavor, sftp_loopback, backends)
     sftp_wire.before["open"] = _deny(lambda p: b"/dst/" in p, nth=5, onward=True)
     offered = []
 
@@ -776,12 +849,7 @@ def test_copy_that_declines_an_error_stops_after_the_children_already_running(
         return False
 
     with pytest.raises(PermissionError):
-        _path(sftp_loopback, backend, "src").copy(
-            _path(sftp_loopback, backend, "dst"),
-            recursive=True,
-            overwrite=True,
-            on_error=decline,
-        )
+        at("src").copy(at("dst"), recursive=True, overwrite=True, on_error=decline)
 
     # The sequential walk stops at the first error it is told not to skip.
     # The concurrent one asks each child that fails before the others are
@@ -790,20 +858,20 @@ def test_copy_that_declines_an_error_stops_after_the_children_already_running(
     if kind == "paramiko":
         assert len(offered) == 1
     else:
-        assert 1 <= len(offered) < len(expected)
+        assert 0 < len(offered) < len(expected)
     assert len(_files(sftp_root / "dst")) < len(expected)
     _native(kind, native_calls, "_concurrent_copy")
 
 
 def test_copy_with_both_error_keywords_raises_before_any_request(
-    kind, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
+    kind, flavor, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
 ):
     _copy_tree(sftp_root)
-    backend = _backend(kind, backends)
+    at = _paths(kind, flavor, sftp_loopback, backends)
 
     with pytest.raises(TypeError):
-        _path(sftp_loopback, backend, "src").copy(
-            _path(sftp_loopback, backend, "dst"),
+        at("src").copy(
+            at("dst"),
             recursive=True,
             ignore_error=True,
             on_error=lambda error, path: True,
@@ -815,10 +883,10 @@ def test_copy_with_both_error_keywords_raises_before_any_request(
 
 
 def test_rm_handler_that_raises_is_not_offered_its_own_exception(
-    kind, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
+    kind, flavor, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
 ):
     _chain(sftp_root)
-    backend = _backend(kind, backends)
+    at = _paths(kind, flavor, sftp_loopback, backends)
     sftp_wire.before["remove"] = _deny(lambda p: p.endswith(b"locked.txt"))
     offered = []
 
@@ -827,17 +895,17 @@ def test_rm_handler_that_raises_is_not_offered_its_own_exception(
         raise _Stop()
 
     with pytest.raises(_Stop):
-        _path(sftp_loopback, backend, "tree").rm(recursive=True, ignore_error=stop)
+        at("tree").rm(recursive=True, ignore_error=stop)
 
     assert offered == ["PermissionError"]
     _native(kind, native_calls, "_concurrent_rm")
 
 
 def test_missing_ok_covers_the_path_itself_and_not_what_vanished_below_it(
-    kind, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
+    kind, flavor, sftp_loopback, sftp_root, sftp_wire, backends, native_calls
 ):
-    backend = _backend(kind, backends)
-    _path(sftp_loopback, backend, "absent").rm(recursive=True, missing_ok=True)
+    at = _paths(kind, flavor, sftp_loopback, backends)
+    at("absent").rm(recursive=True, missing_ok=True)
 
     (sftp_root / "tree" / "sub").mkdir(parents=True)
     (sftp_root / "tree" / "sub" / "ghost.txt").write_bytes(b"x")
@@ -846,18 +914,133 @@ def test_missing_ok_covers_the_path_itself_and_not_what_vanished_below_it(
     )
 
     with pytest.raises(FileNotFoundError):
-        _path(sftp_loopback, backend, "tree").rm(recursive=True, missing_ok=True)
+        at("tree").rm(recursive=True, missing_ok=True)
 
     assert (sftp_root / "tree" / "sub" / "ghost.txt").exists()
-    # `absent` is not a directory, so only `tree` took the native walk.
+    # Both calls took the native walk: the missing path is found by the walk's
+    # own stat of its root.
     _native(kind, native_calls, "_concurrent_rm", times=2)
 
 
-def test_missing_root_is_an_error_without_missing_ok(kind, sftp_loopback, backends):
-    backend = _backend(kind, backends)
+def test_missing_root_is_an_error_without_missing_ok(
+    kind, flavor, sftp_loopback, backends
+):
+    at = _paths(kind, flavor, sftp_loopback, backends)
 
     with pytest.raises(FileNotFoundError):
-        _path(sftp_loopback, backend, "absent").rm(recursive=True)
+        at("absent").rm(recursive=True)
+
+
+# --- which copies take the native walk ---------------------------------------
+
+
+def _small_tree(root):
+    (root / "src" / "sub").mkdir(parents=True)
+    (root / "src" / "a.txt").write_bytes(b"a")
+    (root / "src" / "sub" / "b.txt").write_bytes(b"b")
+    return {"a.txt": b"a", "sub/b.txt": b"b"}
+
+
+def test_a_copy_and_a_remove_inside_one_server_take_the_native_walk(
+    kind, flavor, sftp_loopback, sftp_root, backends, native_calls
+):
+    expected = _small_tree(sftp_root)
+    at = _paths(kind, flavor, sftp_loopback, backends)
+
+    at("src").copy(at("out"), recursive=True)
+    assert _files(sftp_root / "out") == expected
+    _native(kind, native_calls, "_concurrent_copy")
+
+    at("out").rm(recursive=True)
+    assert not (sftp_root / "out").exists()
+    _native(kind, native_calls, "_concurrent_rm")
+
+
+def test_a_target_on_another_server_is_copied_by_the_generic_copy(
+    kind,
+    flavor,
+    sftp_loopback,
+    sftp_loopbacks,
+    sftp_root,
+    tmp_path,
+    backends,
+    native_calls,
+):
+    expected = _small_tree(sftp_root)
+    other_root = tmp_path / "other"
+    other_root.mkdir()
+    other = sftp_loopbacks(other_root)
+    source = _paths(kind, flavor, sftp_loopback, backends)
+    target = _paths(kind, flavor, other, backends)
+
+    source("src").copy(target("out"), recursive=True)
+
+    assert _files(other_root / "out") == expected
+    assert not (sftp_root / "out").exists()
+    assert native_calls["_concurrent_copy"] == 0
+
+
+def test_a_target_of_another_account_is_copied_by_the_generic_copy(
+    kind, flavor, sftp_loopback, sftp_root, backends, native_calls
+):
+    expected = _small_tree(sftp_root)
+    source = _paths(kind, flavor, sftp_loopback, backends)
+    target = _paths(kind, flavor, sftp_loopback, backends, user="y")
+
+    source("src").copy(target("out"), recursive=True)
+
+    assert _files(sftp_root / "out") == expected
+    assert native_calls["_concurrent_copy"] == 0
+
+
+def test_two_backends_of_one_endpoint_are_one_tree_for_a_path_and_two_for_a_uri(
+    kind, flavor, sftp_loopback, sftp_root, backends, native_calls
+):
+    expected = _small_tree(sftp_root)
+    source = _paths(kind, flavor, sftp_loopback, backends)
+    target = _paths(kind, flavor, sftp_loopback, backends)
+    assert source.backend is not target.backend
+
+    source("src").copy(target("out"), recursive=True)
+
+    assert _files(sftp_root / "out") == expected
+    # An `SFTPPath` takes equal endpoints for one server and walks it over the
+    # source's connection; a URI path takes only a shared backend as proof.
+    native = kind == "asyncssh" and flavor == "path"
+    assert native_calls["_concurrent_copy"] == (1 if native else 0)
+
+
+def _link(path, target):
+    """A symbolic link `path` to the directory `target`, or skip where the
+    platform does not allow one."""
+    try:
+        os.symlink(target, path, target_is_directory=True)
+    except (OSError, NotImplementedError) as error:
+        pytest.skip(f"cannot create a symbolic link here: {error}")
+
+
+def test_a_link_copied_as_a_link_is_the_generic_copy_and_a_followed_one_is_not(
+    kind, flavor, sftp_loopback, sftp_root, backends, native_calls
+):
+    real = sftp_root / "real"
+    real.mkdir()
+    (real / "f.txt").write_bytes(b"f")
+    # Absolute: the server reads a relative target against its own working
+    # directory, outside the tree it serves.
+    _link(sftp_root / "link", str(real))
+    at = _paths(kind, flavor, sftp_loopback, backends)
+
+    at("link").copy(at("as_link"), recursive=True, follow_symlinks=False)
+
+    assert os.path.islink(sftp_root / "as_link")
+    assert os.path.realpath(sftp_root / "as_link") == os.path.realpath(real)
+    assert native_calls["_concurrent_copy"] == 0
+
+    at("link").copy(at("followed"), recursive=True)
+
+    assert not os.path.islink(sftp_root / "followed")
+    assert _files(sftp_root / "followed") == {"f.txt": b"f"}
+    _native(kind, native_calls, "_concurrent_copy")
 
 
 # --- modes -----------------------------------------------------------------------
@@ -872,10 +1055,16 @@ _REPORTED = {
 }
 
 
-class _OtherSftpPath(SftpPath):
-    """A second class for the same scheme: `type(src) is not type(dst)`."""
+class _OtherSFTPPath(SFTPPath):
+    """A second class of the same kind: `type(src) is not type(dst)`."""
 
-    __SCHEMES = ()
+
+if SFTPURIPath is not None:
+
+    class _OtherSFTPURIPath(SFTPURIPath):
+        """A second class of the same kind, registered for no scheme."""
+
+        __SCHEMES = ()
 
 
 def _mode_tree(sftp_root, sftp_wire):
@@ -903,7 +1092,7 @@ def _mode_tree(sftp_root, sftp_wire):
     sftp_wire.listed = reshape_entry
     sent = []
 
-    def record(server_, path, attrs, *args):
+    def record(server, path, attrs, *args):
         if attrs.permissions is not None:
             sent.append((path.decode(), attrs.permissions))
 
@@ -912,28 +1101,24 @@ def _mode_tree(sftp_root, sftp_wire):
 
 
 def test_copy_sends_permission_bits_only(
-    kind, sftp_loopback, sftp_root, sftp_wire, backends
+    kind, flavor, sftp_loopback, sftp_root, sftp_wire, backends
 ):
     sent = _mode_tree(sftp_root, sftp_wire)
-    backend = _backend(kind, backends)
+    at = _paths(kind, flavor, sftp_loopback, backends)
 
-    _path(sftp_loopback, backend, "src").copy(
-        _path(sftp_loopback, backend, "dst"), recursive=True
-    )
+    at("src").copy(at("dst"), recursive=True)
 
     assert sent
     assert [mode for _, mode in sent if mode > 0o7777] == []
 
 
 def test_directory_modes_are_settled_after_what_is_in_them(
-    kind, sftp_loopback, sftp_root, sftp_wire, backends
+    kind, flavor, sftp_loopback, sftp_root, sftp_wire, backends
 ):
     sent = _mode_tree(sftp_root, sftp_wire)
-    backend = _backend(kind, backends)
+    at = _paths(kind, flavor, sftp_loopback, backends)
 
-    _path(sftp_loopback, backend, "src").copy(
-        _path(sftp_loopback, backend, "dst"), recursive=True
-    )
+    at("src").copy(at("dst"), recursive=True)
 
     order = [path for path, _ in sent]
     for directory, child in (
@@ -945,14 +1130,12 @@ def test_directory_modes_are_settled_after_what_is_in_them(
 
 
 def test_special_mode_bits_are_kept_between_two_paths_of_one_class(
-    kind, sftp_loopback, sftp_root, sftp_wire, backends
+    kind, flavor, sftp_loopback, sftp_root, sftp_wire, backends
 ):
     sent = _mode_tree(sftp_root, sftp_wire)
-    backend = _backend(kind, backends)
+    at = _paths(kind, flavor, sftp_loopback, backends)
 
-    _path(sftp_loopback, backend, "src").copy(
-        _path(sftp_loopback, backend, "dst"), recursive=True
-    )
+    at("src").copy(at("dst"), recursive=True)
 
     assert dict(sent) == {
         "/dst/a.txt": 0o4755,
@@ -963,13 +1146,16 @@ def test_special_mode_bits_are_kept_between_two_paths_of_one_class(
 
 
 def test_special_mode_bits_are_dropped_between_two_classes(
-    kind, sftp_loopback, sftp_root, sftp_wire, backends
+    kind, flavor, sftp_loopback, sftp_root, sftp_wire, backends
 ):
     sent = _mode_tree(sftp_root, sftp_wire)
-    backend = _backend(kind, backends)
-    target = _OtherSftpPath(sftp_loopback.url("dst"), backend=backend)
+    at = _paths(kind, flavor, sftp_loopback, backends)
+    if flavor == "path":
+        target = _OtherSFTPPath("/dst", backend=at.backend)
+    else:
+        target = _OtherSFTPURIPath(sftp_loopback.url("dst"), backend=at.backend)
 
-    _path(sftp_loopback, backend, "src").copy(target, recursive=True)
+    at("src").copy(target, recursive=True)
 
     assert dict(sent) == {
         "/dst/a.txt": 0o755,

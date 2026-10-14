@@ -1,6 +1,6 @@
 """An in-process asyncssh SFTP server on 127.0.0.1 that counts every request
 the client sends, can fail or reshape any of them, and can refuse a login, for
-the tests of the sftp: scheme.
+the tests of sftppath.
 
 Nothing here leaves the machine: the server listens on port 0 of the loopback
 interface and every test passes the host key or the known_hosts file it needs
@@ -147,7 +147,32 @@ def counting_server_class(wire, base=asyncssh.SFTPServer):
     return _Server
 
 
-class Loopback:
+class SFTPServerAddress:
+    """Where a loopback SFTP server listens, and how a client names it."""
+
+    host = "127.0.0.1"
+    port = None
+
+    def __init__(self, host="127.0.0.1", port=None):
+        self.host = host
+        self.port = port
+
+    def options(self, *, user="x", password="x"):
+        """The endpoint keywords of an `SFTPPath` (or an `SFTPBackend`) for
+        this server."""
+        return {
+            "host": self.host,
+            "port": self.port,
+            "user": user,
+            "password": password,
+        }
+
+    def url(self, path="", *, user="x", password="x"):
+        auth = f"{user}:{password}@" if password is not None else f"{user}@"
+        return f"sftp://{auth}{self.host}:{self.port}/{path}"
+
+
+class Loopback(SFTPServerAddress):
     """An asyncssh SFTP server on 127.0.0.1 serving `root`, on its own loop.
 
     `password` makes the login require it (anything else is refused;
@@ -271,10 +296,6 @@ class Loopback:
     def stop(self):
         stop_server(self.loop, self.thread, self._server, self.live)
 
-    @property
-    def host(self):
-        return "127.0.0.1"
-
     def public_key(self):
         """`(algorithm, base64 key)` of the host key."""
         return tuple(self.host_key.export_public_key("openssh").decode().split()[:2])
@@ -287,14 +308,3 @@ class Loopback:
         else:
             algorithm, blob = key.export_public_key("openssh").decode().split()[:2]
         return f"[{self.host}]:{self.port} {algorithm} {blob}\n"
-
-    def url(self, path="", *, user="x", password="x"):
-        auth = f"{user}:{password}@" if password is not None else f"{user}@"
-        return f"sftp://{auth}{self.host}:{self.port}/{path}"
-
-    def source(self, *, user="x", password="x"):
-        """The `Source` of `url()`, for the backends' own `client(source)`."""
-        from pathlib_next.uri import Source
-
-        userinfo = f"{user}:{password}" if password is not None else user
-        return Source("sftp", userinfo, self.host, self.port)

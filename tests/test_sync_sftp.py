@@ -1,11 +1,7 @@
-"""PathSyncer symlink sync across two different backends: SftpPath (over a
-mocked, paramiko-shaped client -- no paramiko, no server) and LocalPath or
-MemPath.
-
-Split out of test_sync.py, where a mid-module `pytest.importorskip("paramiko")`
-(which these tests never needed) and the `pathlib_next.uri` import skipped or
-un-collected every core PathSyncer test with them.
-"""
+"""PathSyncer symlink sync across two different backends: a path on an SFTP
+server (an `SFTPPath`, or an `SFTPURIPath`, over a fake `BaseSFTPBackend` with a
+paramiko-shaped client -- no SSH library, no server) and `LocalPath` or
+`MemPath`."""
 
 import os
 import stat as _stat_mod
@@ -14,8 +10,10 @@ import pytest
 
 import pathlib_next
 from pathlib_next.mempath import MemPath
-from pathlib_next.uri.schemes.sftp import BaseSftpBackend, SftpPath
 from pathlib_next.sync import PathAndStat, PathSyncer
+from sftp_support import make_path
+
+from sftppath import BaseSFTPBackend
 
 
 def checksum(entry: PathAndStat):
@@ -36,11 +34,9 @@ def _relative_symlink_source(tmp_path):
 
 # --- cross-backend symlink sync (one side supports symlink_to(), the other
 # doesn't / a different implementation) --------------------------------------
-# Reuses tests/test_sftp.py's _FakeBackend/mocked-client pattern (no real
-# SFTP server) so `SftpPath` can stand in as a *different* backend from
-# LocalPath that also implements readlink()/symlink_to() (per
-# docs/divergences.md, sftp: is the one other backend with real symlink
-# support).
+# A path over a fake backend (no real SFTP server) stands in as a different
+# backend from LocalPath that also implements readlink()/symlink_to(); MemPath
+# is the side that does not.
 
 
 class _FakeSymlinkAttr:
@@ -51,7 +47,7 @@ class _FakeSymlinkAttr:
         self.st_mtime = 0
 
 
-class _FakeSymlinkSftpClient:
+class _FakeSymlinkSFTPClient:
     """Minimal paramiko-shaped SFTPClient: one symlink at /link.txt
     pointing (raw, relative) at "real.txt", plus the real file it targets.
     Records symlink() calls so tests can assert what target was created."""
@@ -90,23 +86,31 @@ class _FakeSymlinkSftpClient:
         raise NotImplementedError
 
 
-class _FakeSymlinkBackend(BaseSftpBackend):
+class _FakeSymlinkBackend(BaseSFTPBackend):
     def __init__(self):
-        self._client = _FakeSymlinkSftpClient()
+        self._client = _FakeSymlinkSFTPClient()
 
-    def client(self, source):
+    def client(self):
         return self._client
 
 
-def _fake_sftp(path, backend):
-    return SftpPath(path, backend=backend)
+class _FakeHost:
+    """Where the fake backend's paths live, for `make_path()`: the URI of a
+    path of the `sftp:` flavor."""
+
+    def url(self, path=""):
+        return f"sftp://host/{path}"
 
 
-def test_sync_symlink_preserve_sftp_source_to_local_target(tmp_path):
+def _fake_sftp(flavor, rel, backend):
+    return make_path(flavor, _FakeHost(), backend, rel)
+
+
+def test_sync_symlink_preserve_sftp_source_to_local_target(flavor, tmp_path):
     # SFTP (supports symlink_to) -> Local (supports symlink_to): the
     # supported/supported case across two DIFFERENT backend types.
     backend = _FakeSymlinkBackend()
-    source = _fake_sftp("sftp://host/link.txt", backend=backend)
+    source = _fake_sftp(flavor, "link.txt", backend)
     target = pathlib_next.LocalPath(tmp_path / "link_copy.txt")
 
     PathSyncer(checksum, follow_symlinks=False).sync(source, target)
@@ -115,12 +119,12 @@ def test_sync_symlink_preserve_sftp_source_to_local_target(tmp_path):
     assert target.readlink().as_posix() == "real.txt"
 
 
-def test_sync_symlink_preserve_local_source_to_sftp_target(tmp_path):
+def test_sync_symlink_preserve_local_source_to_sftp_target(flavor, tmp_path):
     # Local (supports symlink_to) -> SFTP (supports symlink_to): the other
     # direction of the supported/supported cross-backend case.
     source = _relative_symlink_source(tmp_path)
     backend = _FakeSymlinkBackend()
-    target = _fake_sftp("sftp://host/link_copy.txt", backend=backend)
+    target = _fake_sftp(flavor, "link_copy.txt", backend)
 
     PathSyncer(checksum, follow_symlinks=False).sync(source, target)
 
@@ -128,13 +132,14 @@ def test_sync_symlink_preserve_local_source_to_sftp_target(tmp_path):
 
 
 def test_sync_symlink_preserve_cross_backend_unsupported_target_raises(
+    flavor,
     tmp_path,
 ):
     # SFTP source (supports symlink_to) -> MemPath target (does not):
     # the documented behavior is NotImplementedError surfaced through
     # ignore_error/hook(), not a silent skip or crash.
     backend = _FakeSymlinkBackend()
-    source = _fake_sftp("sftp://host/link.txt", backend=backend)
+    source = _fake_sftp(flavor, "link.txt", backend)
     target = MemPath("/link_copy.txt")
 
     with pytest.raises(NotImplementedError):

@@ -1,5 +1,6 @@
 """Attributes, file objects, native checksums and the exit of an SFTP session,
-on both backends: what the server is asked for, and what the caller gets back.
+on both backends and both path flavors: what the server is asked for, and what
+the caller gets back.
 
 The loopback server counts the requests it receives and records the
 attributes of a `setstat`, so every assertion is about what went over the
@@ -13,20 +14,17 @@ import pickle
 import subprocess
 import sys
 import threading
-import time
+import weakref
 
 import pytest
 
 asyncssh = pytest.importorskip("asyncssh")
 
-from pathlib_next.uri import Source  # noqa: E402
-from pathlib_next.uri.schemes import sftp as sftp_pkg  # noqa: E402
-from pathlib_next.uri.schemes.sftp import SftpPath  # noqa: E402
-from pathlib_next.uri.schemes.sftp import _asyncssh as backend_mod  # noqa: E402
-from pathlib_next.uri.schemes.sftp import _checkfile  # noqa: E402
-from pathlib_next.uri.schemes.sftp._sshconfig import _DEFAULT_SSH_CONFIG  # noqa: E402
+from sftppath import DEFAULT_SSH_CONFIG  # noqa: E402
+from sftppath import _checkfile, _exit  # noqa: E402
 
-from sftp_loopback import counting_server_class  # noqa: E402
+from sftp_loopback import SFTPServerAddress, counting_server_class  # noqa: E402
+from sftp_support import make_backend, make_path  # noqa: E402
 
 try:
     import paramiko
@@ -48,36 +46,28 @@ def home(tmp_path, monkeypatch):
     return home
 
 
-@pytest.fixture(params=["paramiko", "asyncssh"])
-def kind(request):
-    if request.param == "paramiko" and paramiko is None:
-        pytest.skip("paramiko not installed")
-    return request.param
+def built_path(flavor, kind, server, rel, monkeypatch):
+    """A path whose backend is built from the endpoint alone, with the default
+    host-key checking (the `known_hosts` of the home directory) and the
+    default ssh_config; only the connect options that keep the SSH agent and
+    keys out. Its backend is `path.backend`."""
+    from sftppath import AsyncSSHBackend, SFTPBackend, SFTPPath
 
-
-@pytest.fixture
-def backends():
-    opened = []
-    yield opened
-    for backend in opened:
-        backend.close()
-
-
-def make_backend(kind, backends, **kwargs):
     if kind == "paramiko":
-        backend = sftp_pkg.SftpBackend(
-            {"allow_agent": False, "look_for_keys": False},
-            paramiko.AutoAddPolicy(),
-            ssh_config=None,
-            known_hosts=None,
-            **kwargs,
-        )
+        backend_class = SFTPBackend
+        options = {"connect_opts": {"allow_agent": False, "look_for_keys": False}}
     else:
-        backend = backend_mod.AsyncsshSftpBackend(
-            {"known_hosts": None}, ssh_config=None, **kwargs
-        )
-    backends.append(backend)
-    return backend
+        backend_class = AsyncSSHBackend
+        options = {}
+    if flavor == "path":
+        monkeypatch.setattr(SFTPPath, "_default_backend_cls", backend_class)
+        return SFTPPath("/" + rel, **server.options(), **options)
+    uripath = pytest.importorskip("uripath")
+    from sftppath.uri import SFTPURIBackend
+
+    return uripath.URIPath(
+        server.url(rel), backend=SFTPURIBackend(backend_class, **options)
+    )
 
 
 # --- owners: an unknown id is never sent as 0 ----------------------------------
@@ -121,15 +111,15 @@ def _reports_owner(owner, group):
 
 
 @pytest.fixture
-def v4(sftp_root, sftp_wire, sftp_loopbacks, backends):
+def v4(flavor, sftp_root, sftp_wire, sftp_loopbacks, backends):
     recorder = _SetstatRecorder(sftp_wire)
-    sftp_loopback = sftp_loopbacks(
+    server = sftp_loopbacks(
         sftp_root, sftp_wire, sftp_version=4, server_class=recorder.server_class
     )
     (sftp_root / "a.txt").write_bytes(b"hello")
-    backend = make_backend("asyncssh", backends, sftp_version=4)
-    path = SftpPath(sftp_loopback.url("a.txt"), backend=backend)
-    return path, recorder
+    backend = make_backend("asyncssh", server, sftp_version=4)
+    backends.append(backend)
+    return make_path(flavor, server, backend, "a.txt"), recorder
 
 
 def test_a_partial_chown_against_a_server_that_names_owners_is_refused(v4, sftp_wire):
@@ -169,14 +159,16 @@ def test_a_numeric_owner_name_is_the_id(v4, sftp_wire):
 
 
 def test_a_partial_chown_against_a_v3_server_keeps_the_known_owner(
-    sftp_root, sftp_wire, sftp_loopbacks, kind, backends
+    flavor, sftp_root, sftp_wire, sftp_loopbacks, kind, backends
 ):
     recorder = _SetstatRecorder(sftp_wire)
-    sftp_loopback = sftp_loopbacks(
+    server = sftp_loopbacks(
         sftp_root, sftp_wire, sftp_version=3, server_class=recorder.server_class
     )
     (sftp_root / "a.txt").write_bytes(b"hello")
-    path = SftpPath(sftp_loopback.url("a.txt"), backend=make_backend(kind, backends))
+    backend = make_backend(kind, server)
+    backends.append(backend)
+    path = make_path(flavor, server, backend, "a.txt")
     stat = path.stat()
 
     path.chown(None, 4242)
@@ -190,10 +182,10 @@ def test_a_partial_chown_against_a_v3_server_keeps_the_known_owner(
 
 
 @pytest.fixture
-def served(sftp_root, sftp_wire, sftp_loopbacks, kind, backends):
-    sftp_loopback = sftp_loopbacks(sftp_root, sftp_wire)
-    backend = make_backend(kind, backends)
-    return SftpPath(sftp_loopback.url(), backend=backend), sftp_root
+def served(flavor, kind, sftp_root, sftp_loopback, backends):
+    backend = make_backend(kind, sftp_loopback)
+    backends.append(backend)
+    return make_path(flavor, sftp_loopback, backend), sftp_root
 
 
 def test_write_bytes_returns_the_number_of_bytes(served):
@@ -252,65 +244,55 @@ def test_the_default_ssh_config_is_still_itself_after_a_pickle_or_a_copy():
         copy.deepcopy,
         lambda value: pickle.loads(pickle.dumps(value)),
     ):
-        assert convert(_DEFAULT_SSH_CONFIG) is _DEFAULT_SSH_CONFIG
+        assert convert(DEFAULT_SSH_CONFIG) is DEFAULT_SSH_CONFIG
 
 
 @needs_paramiko
 def test_a_copied_or_pickled_paramiko_backend_still_reads_the_default_config():
-    from pathlib_next.uri.schemes.sftp import _paramiko
+    from sftppath import SFTPBackend, _paramiko
 
-    backend = sftp_pkg.SftpBackend()
-    source = Source("sftp", None, "somehost", None)
+    backend = SFTPBackend("somehost")
     for clone in (
         copy.deepcopy(backend),
         pickle.loads(pickle.dumps(backend)),
     ):
-        assert clone.ssh_config is _DEFAULT_SSH_CONFIG
+        assert clone.ssh_config is DEFAULT_SSH_CONFIG
         assert clone.known_hosts is _paramiko._DEFAULT_KNOWN_HOSTS
-        assert clone.opts(source)["hostname"] == "somehost"
-        assert clone._known_hosts_files(source) == []
+        assert clone.opts()["hostname"] == "somehost"
+        assert clone._known_hosts_files() == []
 
 
-class _PickledPath(SftpPath):
-    __SCHEMES = ()
+def test_a_copied_or_pickled_asyncssh_backend_keeps_its_ssh_config_choice():
+    from sftppath import AsyncSSHBackend
 
-
-if paramiko is not None:
-
-    class _QuietParamiko(sftp_pkg.SftpBackend):
-        __slots__ = ()
-
-        @classmethod
-        def default(cls, ssh_config=_DEFAULT_SSH_CONFIG):
-            return cls(
-                {"allow_agent": False, "look_for_keys": False},
-                None,
-                ssh_config=ssh_config,
-            )
+    default = AsyncSSHBackend("somehost")
+    without = AsyncSSHBackend("somehost", ssh_config=None)
+    for convert in (
+        copy.deepcopy,
+        lambda backend: pickle.loads(pickle.dumps(backend)),
+    ):
+        assert "config" not in convert(default).connect_opts
+        assert convert(without).connect_opts["config"] is None
 
 
 def test_a_pickled_or_copied_path_stats_against_the_server(
-    sftp_root, sftp_wire, sftp_loopbacks, kind, home, monkeypatch
+    flavor, kind, sftp_root, sftp_loopback, home, monkeypatch, backends
 ):
-    sftp_loopback = sftp_loopbacks(sftp_root, sftp_wire)
     (sftp_root / "a.txt").write_bytes(b"hello")
     (home / ".ssh" / "known_hosts").write_text(sftp_loopback.known_hosts_line())
-    monkeypatch.setattr(
-        _PickledPath,
-        "_default_backend_cls",
-        _QuietParamiko if kind == "paramiko" else backend_mod.AsyncsshSftpBackend,
-    )
-    path = _PickledPath(sftp_loopback.url("a.txt"))
-    try:
-        for clone in (
-            pickle.loads(pickle.dumps(path)),
-            pickle.loads(pickle.dumps(_PickledPath(sftp_loopback.url("a.txt")))),
-            copy.deepcopy(path),
-        ):
-            assert clone.stat().st_size == 5
-            assert clone.read_bytes() == b"hello"
-    finally:
-        path.backend.close()
+    path = built_path(flavor, kind, sftp_loopback, "a.txt", monkeypatch)
+    backends.append(path.backend)
+    unused = built_path(flavor, kind, sftp_loopback, "a.txt", monkeypatch)
+    backends.append(unused.backend)
+
+    for clone in (
+        pickle.loads(pickle.dumps(path)),
+        pickle.loads(pickle.dumps(unused)),
+        copy.deepcopy(path),
+    ):
+        backends.append(clone.backend)
+        assert clone.stat().st_size == 5
+        assert clone.read_bytes() == b"hello"
 
 
 # --- native checksums --------------------------------------------------------------
@@ -350,7 +332,9 @@ class _Answers:
 
     def __init__(self, answer):
         self.answer = answer
+        #: The algorithm of each extension request, and the whole of each.
         self.requests = []
+        self.sent = []
 
     def open(self, path, mode, buffering=-1):
         return self._Handle()
@@ -359,6 +343,7 @@ class _Answers:
         import paramiko.sftp as paramiko_sftp
 
         self.requests.append(algorithm)
+        self.sent.append((command, extension, handle, algorithm, rest))
         outcome = self.answer(algorithm, len(self.requests))
         if isinstance(outcome, BaseException):
             raise outcome
@@ -373,19 +358,20 @@ def paramiko_message(payload):
 
 
 @pytest.fixture
-def checksum_path(monkeypatch):
+def checksum_path(flavor, monkeypatch):
     """`path.checksum()` over a fake paramiko client: the real backend code,
     the real reply parser, a client that answers as the test says."""
     pytest.importorskip("paramiko")
-    from pathlib_next.uri.schemes.sftp._paramiko import SftpBackend
+    from sftppath import SFTPBackend
 
-    monkeypatch.setattr(_checkfile, "_SUPPORT_CACHE", {})
+    monkeypatch.setattr(_checkfile, "_SUPPORT_CACHE", weakref.WeakKeyDictionary())
 
     def build(answer):
         client = _Answers(answer)
-        backend = SftpBackend.__new__(SftpBackend)
-        monkeypatch.setattr(SftpBackend, "client", lambda self, source: client)
-        return SftpPath("sftp://host/a.txt", backend=backend), backend, client
+        backend = SFTPBackend("host")
+        monkeypatch.setattr(SFTPBackend, "client", lambda self: client)
+        path = make_path(flavor, SFTPServerAddress("host", 22), backend, "a.txt")
+        return path, client
 
     return build
 
@@ -396,7 +382,7 @@ def test_a_refused_algorithm_does_not_switch_off_the_others(checksum_path):
             return NotImplementedError("md5 is disabled")
         return _reply(algorithm)
 
-    path, _backend, client = checksum_path(answer)
+    path, client = checksum_path(answer)
 
     with pytest.raises(NotImplementedError):
         path.checksum("md5")
@@ -415,16 +401,16 @@ def test_a_connection_that_produced_a_digest_is_never_reported_empty(checksum_pa
             return NotImplementedError("md5 is disabled")
         return _reply(algorithm)
 
-    path, backend, client = checksum_path(answer)
+    path, client = checksum_path(answer)
 
     assert path.checksum("sha256") == _DIGESTS["sha256"].hex()
-    supported = backend.supported_checksums(path)
+    supported = path.supported_checksums()
     with pytest.raises(NotImplementedError):
         path.checksum("md5")
 
     assert "sha256" in supported
-    assert "md5" not in backend.supported_checksums(path)
-    assert backend.supported_checksums(path)
+    assert "md5" not in path.supported_checksums()
+    assert path.supported_checksums()
     assert client.requests == ["sha256", "md5"]
 
 
@@ -434,7 +420,7 @@ def test_a_failure_for_one_file_refuses_nothing(checksum_path):
             return OSError("I/O error reading this one file")
         return _reply(algorithm)
 
-    path, _backend, client = checksum_path(answer)
+    path, client = checksum_path(answer)
 
     with pytest.raises(NotImplementedError):
         path.checksum("md5")
@@ -445,20 +431,41 @@ def test_a_failure_for_one_file_refuses_nothing(checksum_path):
 def test_a_refusal_of_the_whole_extension_costs_one_request_per_algorithm(
     checksum_path,
 ):
-    path, backend, client = checksum_path(
+    path, client = checksum_path(
         lambda algorithm, _call: NotImplementedError("operation unsupported")
     )
 
     for _ in range(3):
         with pytest.raises(NotImplementedError):
             path.checksum("md5")
-    assert backend.supported_checksums(path) == frozenset()
+    assert path.supported_checksums() == frozenset()
     assert client.requests == ["md5"]
+
+
+def test_the_request_names_the_handle_one_algorithm_and_the_whole_file(checksum_path):
+    import paramiko.sftp as paramiko_sftp
+
+    path, client = checksum_path(lambda algorithm, _call: _reply(algorithm))
+
+    path.checksum("sha256")
+
+    ((command, extension, handle, algorithm, rest),) = client.sent
+    assert command == paramiko_sftp.CMD_EXTENDED
+    assert extension == "check-file-handle"
+    assert handle == b"h"
+    assert algorithm == "sha256"
+    # start-offset and length are uint64 on the wire, which a plain int is not
+    # when a message packs it; block-size is a uint32.
+    start, length, block_size = rest
+    assert (start, length, block_size) == (0, 0, 0)
+    assert type(start) is paramiko_sftp.int64
+    assert type(length) is paramiko_sftp.int64
+    assert type(block_size) is int
 
 
 @pytest.mark.parametrize("algorithm", ["MD5", "sha-256", "md5,sha1", "", "blake2"])
 def test_an_algorithm_the_draft_does_not_name_is_not_sent(checksum_path, algorithm):
-    path, _backend, client = checksum_path(lambda name, _call: _reply("md5"))
+    path, client = checksum_path(lambda name, _call: _reply("md5"))
 
     with pytest.raises(NotImplementedError):
         path.checksum(algorithm)
@@ -482,28 +489,67 @@ def test_a_reply_for_an_algorithm_without_a_known_size_is_refused():
             _checkfile.parse_reply(_reply("md5", b"\x00" * 3), algorithm)
 
 
+def test_a_server_without_the_extension_is_asked_once_per_algorithm(
+    flavor, kind, sftp_loopback, sftp_root, sftp_wire, backends
+):
+    (sftp_root / "a.txt").write_bytes(b"hello")
+    backend = make_backend(kind, sftp_loopback)
+    backends.append(backend)
+    path = make_path(flavor, sftp_loopback, backend, "a.txt")
+    sftp_wire.reset()
+
+    for algorithm in ("md5", "md5", "md5", "sha256", "sha256"):
+        with pytest.raises(NotImplementedError):
+            path.checksum(algorithm)
+    assert path.supported_checksums() == frozenset()
+
+    # Each attempt opens the file once and closes it again; the second and
+    # third md5 and the second sha256 never reach the server.
+    assert sftp_wire.count("open", "open56") == 2
+    assert sftp_wire.count("close") == 2
+
+
 # --- unclosed files are written when the interpreter exits ----------------------
 
 _CHILD = """
 import sys
-from pathlib_next.uri.schemes.sftp import SftpPath
 
-url, kind, mode = sys.argv[1:4]
+host, port, kind, flavor, mode = sys.argv[1:6]
+port = int(port)
 if kind == "paramiko":
     import paramiko
-    from pathlib_next.uri.schemes.sftp import SftpBackend
+    from sftppath import SFTPBackend
 
-    backend = SftpBackend(
-        {"allow_agent": False, "look_for_keys": False},
-        paramiko.AutoAddPolicy(),
+    backend = SFTPBackend(
+        host,
+        port,
+        user="x",
+        password="x",
+        connect_opts={"allow_agent": False, "look_for_keys": False},
+        hostkeypolicy=paramiko.AutoAddPolicy(),
         ssh_config=None,
         known_hosts=None,
     )
 else:
-    from pathlib_next.uri.schemes.sftp import AsyncsshSftpBackend
+    from sftppath import AsyncSSHBackend
 
-    backend = AsyncsshSftpBackend({"known_hosts": None}, ssh_config=None)
-path = SftpPath(url, backend=backend)
+    backend = AsyncSSHBackend(
+        host,
+        port,
+        user="x",
+        password="x",
+        connect_opts={"known_hosts": None},
+        ssh_config=None,
+    )
+if flavor == "path":
+    from sftppath import SFTPPath
+
+    path = SFTPPath("/left.txt", backend=backend)
+else:
+    import sftppath.uri
+    from uripath import URIPath
+
+    path = URIPath(f"sftp://x:x@{host}:{port}/left.txt", backend=backend)
 handle = path.open("wb" if mode == "bytes" else "w")
 handle.write(b"buffered, never closed" if mode == "bytes" else "text, never closed")
 """
@@ -511,16 +557,24 @@ handle.write(b"buffered, never closed" if mode == "bytes" else "text, never clos
 
 @pytest.mark.parametrize("mode", ["bytes", "text"])
 def test_a_file_left_open_at_exit_is_written(
-    sftp_root, sftp_wire, sftp_loopbacks, kind, mode
+    flavor, kind, sftp_loopback, sftp_root, mode
 ):
-    sftp_loopback = sftp_loopbacks(sftp_root, sftp_wire)
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(
         [SRC, *([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])]
     )
 
     finished = subprocess.run(
-        [sys.executable, "-c", _CHILD, sftp_loopback.url("left.txt"), kind, mode],
+        [
+            sys.executable,
+            "-c",
+            _CHILD,
+            sftp_loopback.host,
+            str(sftp_loopback.port),
+            kind,
+            flavor,
+            mode,
+        ],
         env=env,
         capture_output=True,
         text=True,
@@ -534,46 +588,46 @@ def test_a_file_left_open_at_exit_is_written(
 
 
 def test_the_exit_hook_does_not_wait_for_a_connection_that_hangs(monkeypatch):
+    entered = threading.Event()
     release = threading.Event()
+    finished = threading.Event()
 
     class _Hung:
         def close(self):
+            entered.set()
+            # The cap only frees the thread should the hook wrongly wait for it.
             release.wait(30)
+            finished.set()
 
     hung = _Hung()
-    sftp_pkg._UNCLOSED.add(hung)
-    monkeypatch.setattr(sftp_pkg, "_EXIT_GRACE", 0.3)
+    monkeypatch.setattr(_exit, "_UNCLOSED", weakref.WeakSet([hung]))
+    monkeypatch.setattr(_exit, "_EXIT_GRACE", 0.3)
     try:
-        started = time.monotonic()
-        sftp_pkg._close_unclosed()
-        assert time.monotonic() - started < 10
+        _exit._close_unclosed()
+
+        # The hook has returned while the close it started is still blocked.
+        assert entered.wait(10)
+        assert not finished.is_set()
     finally:
         release.set()
-        sftp_pkg._UNCLOSED.discard(hung)
+        finished.wait(10)
 
 
-# --- one default backend for the paths of one endpoint ---------------------------
+# --- one backend for the paths derived from one path ------------------------------
 
 
 def test_a_fresh_root_its_parent_and_twenty_children_open_one_connection(
-    sftp_root, sftp_wire, sftp_loopbacks, kind, home, monkeypatch
+    flavor, kind, sftp_root, sftp_loopback, home, monkeypatch, backends
 ):
-    sftp_loopback = sftp_loopbacks(sftp_root, sftp_wire)
     for number in range(20):
         (sftp_root / f"c{number}.txt").write_bytes(b"x")
     (home / ".ssh" / "known_hosts").write_text(sftp_loopback.known_hosts_line())
-    monkeypatch.setattr(
-        SftpPath,
-        "_default_backend_cls",
-        _QuietParamiko if kind == "paramiko" else backend_mod.AsyncsshSftpBackend,
-    )
 
-    path = SftpPath(sftp_loopback.url("c0.txt"))
-    try:
-        assert path.parent.exists()
-        assert path.exists()
-        assert all((path.parent / f"c{n}.txt").exists() for n in range(20))
-    finally:
-        path.backend.close()
+    path = built_path(flavor, kind, sftp_loopback, "c0.txt", monkeypatch)
+    backends.append(path.backend)
+
+    assert path.parent.exists()
+    assert path.exists()
+    assert all((path.parent / f"c{n}.txt").exists() for n in range(20))
 
     assert sftp_loopback.connections == 1

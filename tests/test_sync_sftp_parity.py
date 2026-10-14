@@ -1,14 +1,14 @@
-"""PathSyncer and SftpPath parity against the loopback SFTP server.
+"""PathSyncer and SFTPPath parity against the loopback SFTP server, for a plain
+path and an `sftp:` URI path, on both backends.
 
-Regressions for the 2026-09-15 deep review, wave 5 group G6: sync onto an
-SFTP target keeps the previous version of a file until the new one is
-complete, dry runs and remove_missing events on an SFTP tree, and the SFTP
-medium findings (rename over an existing file, unlink of a dangling link,
-readlink, asyncssh file-object contract, asyncssh recursive copy
-guards and `ignore_error` bools, exit with a file left open, and the
-check-file-handle round trip on both backends). Every test asserts what the
-server's filesystem (`fixture_tree`, the server root) holds afterwards, or
-what was sent.
+Sync onto an SFTP target keeps the previous version of a file until the new one
+is complete; dry runs and `remove_missing` events on an SFTP tree; rename over
+an existing file, unlink of a dangling link and readlink; the asyncssh file
+object contract; the guards and `ignore_error` handling of asyncssh's recursive
+copy; an interpreter that exits with a file left open; and the
+`check-file-handle` round trip on both backends. Every test asserts what the
+server's filesystem (`fixture_tree`, the server root) holds afterwards, or what
+was sent.
 """
 
 import errno
@@ -16,76 +16,46 @@ import hashlib
 import inspect
 import io
 import os
+import pathlib
 import subprocess
 import sys
-import textwrap
-import threading
-import time
 
 import pytest
 
 pytest.importorskip("asyncssh")
 
-import pathlib_next  # noqa: E402
+import asyncssh  # noqa: E402
+import asyncssh.sftp as asftp  # noqa: E402
+import sftppath  # noqa: E402
+from asyncssh.packet import String  # noqa: E402
 from pathlib_next.mempath import MemPath  # noqa: E402
-from pathlib_next.uri.schemes.sftp import SftpPath  # noqa: E402
-from pathlib_next.uri.schemes.sftp import _asyncssh as backend_mod  # noqa: E402
 from pathlib_next.sync import PathSyncer, SyncEvent  # noqa: E402
-
-try:
-    import paramiko
-except ImportError:  # asyncssh-only install
-    paramiko = None
+from sftp_support import make_backend, make_path  # noqa: E402
+from sftppath import _checkfile  # noqa: E402
+from sftppath._asyncssh import _file, _loop  # noqa: E402
 
 
 def _size(entry):
     return entry.stat.st_size
 
 
-def _make_backend(kind):
-    if kind == "paramiko":
-        if paramiko is None:
-            pytest.skip("paramiko not installed")
-        from pathlib_next.uri.schemes.sftp import SftpBackend
-
-        return SftpBackend({"allow_agent": False, "look_for_keys": False})
-    return backend_mod.AsyncsshSftpBackend()
-
-
-def _close(backend, path):
-    if paramiko is not None and not isinstance(
-        backend, backend_mod.AsyncsshSftpBackend
-    ):
-        from pathlib_next.uri.schemes.sftp._paramiko import _CACHED_CLIENTS
-
-        try:
-            backend.client(path.source).sock.get_transport().close()
-        except Exception:
-            pass
-        _CACHED_CLIENTS.invalidate(backend, path.source, threading.get_ident())
-    else:
-        backend.close()
-
-
-@pytest.fixture(params=["paramiko", "asyncssh"])
-def remote(request, sftp_server, fixture_tree):
-    """(SftpPath at the server root, local path of that root)."""
-    backend = _make_backend(request.param)
-    root = SftpPath(sftp_server, backend=backend)
-    try:
-        yield root, fixture_tree
-    finally:
-        _close(backend, root)
+def _remote(kind, flavor, server, tree, backends):
+    backend = make_backend(kind, server)
+    backends.append(backend)
+    return make_path(flavor, server, backend), tree
 
 
 @pytest.fixture
-def aremote(sftp_server, fixture_tree):
-    backend = _make_backend("asyncssh")
-    root = SftpPath(sftp_server, backend=backend)
-    try:
-        yield root, fixture_tree
-    finally:
-        _close(backend, root)
+def remote(kind, flavor, sftp_server, fixture_tree, backends):
+    """(path at the server root, local path of that root), over a backend of
+    each library, as an `SFTPPath` and as an `sftp:` URI path."""
+    return _remote(kind, flavor, sftp_server, fixture_tree, backends)
+
+
+@pytest.fixture
+def aremote(flavor, sftp_server, fixture_tree, backends):
+    """`remote`, over asyncssh only."""
+    return _remote("asyncssh", flavor, sftp_server, fixture_tree, backends)
 
 
 def _symlink(target, link):
@@ -97,6 +67,11 @@ def _symlink(target, link):
 
 def _names(path):
     return sorted(p.name for p in path.iterdir())
+
+
+def _link_text(flavor, link):
+    """The text of a link as `readlink()` of the flavor returns it."""
+    return link.as_posix() if flavor == "path" else link.path
 
 
 # --- PathSyncer onto an SFTP target ------------------------------------------
@@ -177,12 +152,12 @@ def test_sync_dry_run_onto_remote_new_subdirectory_changes_nothing(remote):
     assert events == ["stale.txt"]
 
 
-# --- SftpPath: rename, unlink, readlink ----------------------------------------
+# --- rename, unlink, readlink ------------------------------------------------
 
 
 def test_rename_over_existing_file_replaces_it(remote):
-    # sftp-rename-over-existing-parity: POSIX rename semantics through
-    # posix-rename@openssh.com (the loopback server advertises it).
+    # POSIX rename semantics through posix-rename@openssh.com, which the
+    # loopback server advertises.
     root, local = remote
     (local / "old.txt").write_text("new content")
     (local / "new.txt").write_text("stale content")
@@ -204,7 +179,6 @@ def test_rename_to_missing_target_still_works(remote):
 
 
 def test_unlink_missing_ok_removes_dangling_symlink(remote):
-    # sftp-unlink-missing-ok-dangling-symlink
     root, local = remote
     _symlink("release-1", local / "current")
     link = root / "current"
@@ -227,40 +201,47 @@ def test_symlink_force_repoints_dangling_link(remote):
     assert os.readlink(local / "current") == "release-2"
 
 
-def test_readlink_absolute_target_keeps_the_server(remote):
+def test_readlink_absolute_target_keeps_the_server(remote, flavor):
     # A relative target cannot be read back through this chrooted asyncssh
-    # server (it resolves links against its own cwd), so the relative case
-    # is covered with a fake client in tests/test_sftp.py.
+    # server (it resolves links against its own cwd), so the relative case is
+    # covered with a fake client in tests/test_sftp.py.
     root, local = remote
     (local / "releases" / "42").mkdir(parents=True)
+    (local / "releases" / "42" / "f.txt").write_text("in 42")
     _symlink(str(local / "releases" / "42"), local / "current")
 
     link = (root / "current").readlink()
 
-    assert link.path == "/releases/42"
-    assert link.source == root.source
+    assert _link_text(flavor, link) == "/releases/42"
     assert str(link).endswith("/releases/42")
+    if flavor == "path":
+        assert link.backend is root.backend
+    else:
+        assert link.source == root.source
+    # The target is read from the server the link is on.
+    assert (link / "f.txt").read_text() == "in 42"
 
 
 # --- asyncssh file objects -------------------------------------------------------
 
 
 def test_asyncssh_binary_readline_is_buffered(aremote, monkeypatch):
-    # sftp-syncfile-io-contract-gaps: readline() was one round trip per byte.
+    # readline() is served from a buffer: one request per refill, not one per
+    # byte.
     root, local = aremote
     (local / "big.log").write_bytes(b"x" * 1024 + b"\n" + b"tail\n")
     calls = []
-    real_run = backend_mod._run
+    real_run = _loop._run
 
     def counting_run(coro, *args, **kwargs):
         calls.append(coro)
         return real_run(coro, *args, **kwargs)
 
     with (root / "big.log").open("rb") as handle:
-        monkeypatch.setattr(backend_mod, "_run", counting_run)
-        assert handle.readline() == b"x" * 1024 + b"\n"
-        assert handle.readline() == b"tail\n"
-        monkeypatch.setattr(backend_mod, "_run", real_run)
+        with monkeypatch.context() as patch:
+            patch.setattr(_loop, "_run", counting_run)
+            assert handle.readline() == b"x" * 1024 + b"\n"
+            assert handle.readline() == b"tail\n"
 
     assert len(calls) < 5
 
@@ -298,54 +279,90 @@ def test_asyncssh_file_readinto_and_read_bytes(aremote):
         assert digest == hashlib.sha256(payload).hexdigest()
 
 
-def test_asyncssh_close_errors_are_translated_and_close_the_object(monkeypatch):
-    class _FailingAsyncFile:
-        async def close(self):
-            import asyncssh
+class _FailingAsyncFile:
+    async def close(self):
+        raise asyncssh.SFTPFailure("close failed")
 
-            raise asyncssh.SFTPFailure("close failed")
 
-    raw = backend_mod._SyncSftpFile(_FailingAsyncFile(), timeout=5, mode="r")
+def test_asyncssh_close_errors_are_translated_and_close_the_object():
+    raw = _file._SyncSFTPFile(_FailingAsyncFile(), timeout=5, mode="r")
+
     with pytest.raises(OSError):
         raw.close()
+
     assert raw.closed
 
 
+_LEAKING_PATH = """
+from sftppath import AsyncSSHBackend, SFTPPath
+
+backend = AsyncSSHBackend(
+    {host!r},
+    {port},
+    user="x",
+    password="x",
+    connect_opts={{"known_hosts": None}},
+    ssh_config=None,
+    timeout=None,
+)
+path = SFTPPath("/log.txt", backend=backend)
+"""
+
+_LEAKING_URI = """
+from uripath import URIPath
+
+from sftppath import AsyncSSHBackend
+from sftppath.uri import SFTPURIBackend
+
+path = URIPath(
+    {url!r},
+    backend=SFTPURIBackend(
+        AsyncSSHBackend,
+        connect_opts={{"known_hosts": None}},
+        ssh_config=None,
+        timeout=None,
+    ),
+)
+"""
+
+_LEAKING_READ = """
+f = path.open("rb")
+print(f.readline().decode().strip())
+"""
+
+
 def test_asyncssh_file_left_open_does_not_hang_interpreter_exit(
-    aremote, sftp_server, tmp_path
+    flavor, sftp_server, fixture_tree, tmp_path
 ):
-    # sftp-exit-hang-unclosed-file: a module-global handle finalized at
-    # shutdown used to wait the full 60 s request timeout.
-    root, local = aremote
-    (local / "log.txt").write_text("line\n")
+    # A module-global handle is finalized at shutdown, when the loop thread can
+    # no longer run: closing it must not wait for a reply. The child has no
+    # request timeout, so a close that waited would never return.
+    (fixture_tree / "log.txt").write_text("line\n")
+    prelude = (
+        _LEAKING_PATH.format(host=sftp_server.host, port=sftp_server.port)
+        if flavor == "path"
+        else _LEAKING_URI.format(url=sftp_server.url("log.txt"))
+    )
     script = tmp_path / "leak_handle.py"
-    script.write_text(textwrap.dedent(f"""
-            from pathlib_next.uri.schemes.sftp import SftpPath
-            from pathlib_next.uri.schemes.sftp._asyncssh import AsyncsshSftpBackend
-
-            path = SftpPath({(sftp_server + "log.txt")!r}, backend=AsyncsshSftpBackend())
-            f = path.open("rb")
-            print(f.readline().decode().strip())
-            """))
-
+    script.write_text(prelude + _LEAKING_READ)
     env = os.environ.copy()
-    # The child imports the same pathlib_next this test runs against.
-    package_root = os.path.dirname(os.path.dirname(pathlib_next.__file__))
+    # The child imports the same sftppath this test runs against.
+    package_root = str(pathlib.Path(sftppath.__file__).parent.parent)
     env["PYTHONPATH"] = os.pathsep.join(
         [package_root] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])
     )
-    started = time.monotonic()
+
+    # The timeout only ends a run that hangs.
     result = subprocess.run(
         [sys.executable, str(script)],
         capture_output=True,
         text=True,
-        timeout=50,
+        timeout=120,
         env=env,
     )
-    elapsed = time.monotonic() - started
 
+    assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "line", result.stderr
-    assert elapsed < 30, result.stderr
     assert "TimeoutError" not in result.stderr
 
 
@@ -360,7 +377,6 @@ def _copy_tree(local):
 
 @pytest.mark.parametrize("ignore_error", [True, False])
 def test_asyncssh_recursive_copy_accepts_bool_ignore_error(aremote, ignore_error):
-    # sftp-concurrent-copy-bool-ignore-error: a bool was *called*.
     root, local = aremote
     _copy_tree(local)
     (local / "dst" / "1.txt").mkdir(parents=True)  # forces a child error
@@ -389,6 +405,36 @@ def test_asyncssh_recursive_copy_callable_ignore_error_is_notified(aremote):
 
     assert len(errors) == 1 and isinstance(errors[0], IsADirectoryError)
     assert (local / "dst" / "sub" / "2.txt").read_text() == "two"
+
+
+def test_asyncssh_recursive_copy_on_error_is_offered_each_failing_child(aremote):
+    root, local = aremote
+    _copy_tree(local)
+    (local / "dst" / "1.txt").mkdir(parents=True)
+    offered = []
+
+    def on_error(error, path):
+        offered.append((type(error), path.name))
+        return True
+
+    (root / "src").copy(root / "dst", recursive=True, overwrite=True, on_error=on_error)
+
+    assert offered == [(IsADirectoryError, "1.txt")]
+    assert (local / "dst" / "sub" / "2.txt").read_text() == "two"
+
+
+def test_asyncssh_recursive_copy_stops_at_a_child_on_error_declines(aremote):
+    root, local = aremote
+    _copy_tree(local)
+    (local / "dst" / "1.txt").mkdir(parents=True)
+
+    with pytest.raises(IsADirectoryError):
+        (root / "src").copy(
+            root / "dst",
+            recursive=True,
+            overwrite=True,
+            on_error=lambda error, path: False,
+        )
 
 
 def test_asyncssh_recursive_copy_into_own_subtree_raises_einval(aremote):
@@ -454,10 +500,6 @@ class _CheckFileServer:
 def check_file_server(monkeypatch):
     """Adds `check-file-handle` to the loopback server for one test,
     answering with the draft's `"check-file"`-prefixed reply."""
-    import asyncssh
-    import asyncssh.sftp as asftp
-    from asyncssh.packet import String
-
     server = _CheckFileServer()
 
     class _Reply:
@@ -511,10 +553,6 @@ def check_file_server(monkeypatch):
 
 @pytest.mark.parametrize("algorithm", ["md5", "sha256"])
 def test_checksum_is_the_server_side_digest(remote, check_file_server, algorithm):
-    import asyncssh.sftp as asftp
-
-    from pathlib_next.uri.schemes.sftp import _checkfile
-
     root, local = remote
     payload = os.urandom(200 * 1024)
     (local / "blob.bin").write_bytes(payload)
@@ -530,8 +568,8 @@ def test_checksum_is_the_server_side_digest(remote, check_file_server, algorithm
 
 
 def test_checksum_refusal_costs_one_request_per_connection(remote, check_file_server):
-    # sftp-check-file-openssh-extension-does-not-exist: a server without the
-    # extension (like OpenSSH) is asked once, not once per file.
+    # A server without the extension (like OpenSSH) is asked once, not once
+    # per file.
     root, local = remote
     check_file_server.refuse = True
     (local / "x.txt").write_text("x")
@@ -570,7 +608,8 @@ def test_sync_between_remote_trees_compares_native_digests(remote, check_file_se
 
     assert (local / "d" / "cfg.json").read_text() == '{"v": 2}'
     assert os.stat(local / "d" / "same.txt").st_mtime == 1  # left alone
-    assert check_file_server.requests
+    # Every digest asked for was the whole file's, by the PathSyncer default.
+    assert set(check_file_server.requests) == {("md5", 0, 0, 0)}
 
 
 def test_sync_sftp_to_sftp_without_native_checksum_still_detects_changes(remote):
@@ -586,21 +625,20 @@ def test_sync_sftp_to_sftp_without_native_checksum_still_detects_changes(remote)
     assert _names(local / "d") == ["cfg.json"]
 
 
-def test_sync_leaves_identical_remote_symlink_alone(remote, monkeypatch):
-    # sync-identical-symlink-recreated, through SftpPath's `.path` link text
-    # on both sides (absolute targets: this chrooted server cannot read a
-    # relative one back, see test_readlink_absolute_target_keeps_the_server).
+def test_sync_leaves_identical_remote_symlink_alone(remote, flavor, monkeypatch):
+    # Absolute targets: this chrooted server cannot read a relative one back
+    # (see test_readlink_absolute_target_keeps_the_server).
     root, local = remote
     (local / "releases" / "42").mkdir(parents=True)
     (local / "src").mkdir()
     _symlink(str(local / "releases" / "42"), local / "src" / "current")
     syncer = PathSyncer(_size, follow_symlinks=False)
     syncer.sync(root / "src", root / "dst")
-    assert (root / "dst" / "current").readlink().path == "/releases/42"
+    assert _link_text(flavor, (root / "dst" / "current").readlink()) == "/releases/42"
 
     created = []
     monkeypatch.setattr(
-        SftpPath, "_symlink_to", lambda self, *args: created.append(self)
+        type(root), "_symlink_to", lambda self, *args: created.append(self)
     )
     events = []
     syncer._hook = lambda s, t, event, dry_run: events.append(event)

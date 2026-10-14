@@ -7,19 +7,17 @@ import pathlib as _pathlib
 import socket as _socket
 import threading as _thread
 
-import netimps as _netimps
 import paramiko as _paramiko
 import paramiko.sftp as _paramiko_sftp
 from paramiko.sftp_attr import SFTPAttributes as _SFTPAttributes
+from pathlib_next import providers as _providers
 
-from .... import providers as _providers
-from ... import Source
 from . import _checkfile, _errors
+from ._base import DEFAULT_PORT, SFTPEndpoint
 
-# The sentinel and path normalization are paramiko-free and live in `_sshconfig`;
-# re-exported here so `from ._paramiko import _DEFAULT_SSH_CONFIG` keeps working.
+# The sentinel and path normalization are paramiko-free and live in `_sshconfig`.
 from ._sshconfig import (
-    _DEFAULT_SSH_CONFIG,
+    DEFAULT_SSH_CONFIG,
     _Sentinel,
     _check_host,
     _expand_includes,
@@ -27,14 +25,14 @@ from ._sshconfig import (
     _normalize_config_paths,
 )
 
-#: Sentinel for `SftpBackend(known_hosts=...)`: the user's `~/.ssh/known_hosts`
+#: Sentinel for `SFTPBackend(known_hosts=...)`: the user's `~/.ssh/known_hosts`
 #: plus every `UserKnownHostsFile` the ssh_config names for the host.
 _DEFAULT_KNOWN_HOSTS = _Sentinel(__name__, "_DEFAULT_KNOWN_HOSTS")
 
 
 class _SSHConfig(_paramiko.SSHConfig):
     """paramiko's parser, except that a ProxyCommand comes back with its
-    ``%`` tokens unexpanded: ``SftpBackend.opts()`` expands them with the host,
+    ``%`` tokens unexpanded: ``SFTPBackend.opts()`` expands them with the host,
     port and user chosen for the connection, which a lookup by host name
     alone cannot know."""
 
@@ -271,7 +269,7 @@ def _timed_out(error: BaseException) -> bool:
     return False
 
 
-def _connect_error(error: BaseException, source: Source) -> "Exception | None":
+def _connect_error(error: BaseException, endpoint: SFTPEndpoint) -> "Exception | None":
     """The `OSError` for a paramiko failure to connect, log in or open the
     SFTP session, or None when `error` is not one of those."""
     if isinstance(error, _NoTransport):
@@ -283,20 +281,20 @@ def _connect_error(error: BaseException, source: Source) -> "Exception | None":
                 return OSError(cause.errno, cause.strerror)
         return None
     if isinstance(error, _paramiko.BadHostKeyException):
-        return _errors.host_key_refused(source)
+        return _errors.host_key_refused(endpoint)
     if isinstance(error, _paramiko.SSHException):
         text = str(error)
         if _timed_out(error) or "timeout" in text.lower():
             return TimeoutError(_errno.ETIMEDOUT, "SFTP connection timed out")
         # `RejectPolicy` (the default) refuses a key no known_hosts file has.
         if "not found in known_hosts" in text:
-            return _errors.host_key_refused(source)
+            return _errors.host_key_refused(endpoint)
         # "No authentication methods available": nothing was left to try.
         if (
             isinstance(error, _paramiko.AuthenticationException)
             or "No authentication methods" in text
         ):
-            return _errors.login_refused(source)
+            return _errors.login_refused(endpoint)
         return _errors.aborted(error)
     if isinstance(error, EOFError):
         return _errors.lost()
@@ -306,8 +304,8 @@ def _connect_error(error: BaseException, source: Source) -> "Exception | None":
     return None
 
 
-def _create_sftpclient(backend: "SftpBackend", source: Source, thread_id: int):
-    transport = backend.transport(source)
+def _create_sftpclient(backend: "SFTPBackend", thread_id: int):
+    transport = backend.transport()
     try:
         client = transport.open_sftp_client()
         if client is None:
@@ -318,7 +316,7 @@ def _create_sftpclient(backend: "SftpBackend", source: Source, thread_id: int):
         return client
     except BaseException as error:
         transport.close()
-        translated = _connect_error(error, source)
+        translated = _connect_error(error, backend.endpoint)
         if translated is None:
             raise
         raise translated from None
@@ -355,8 +353,8 @@ def _client_is_alive(client) -> bool:
 
 
 # Thread-keyed (paramiko's client is bound to the thread owning its socket loop)
-# and module-level, so every SftpBackend shares it, keyed (backend, source,
-# thread_id). Evicted and invalidated clients have their transport closed.
+# and module-level, so every SFTPBackend shares it, keyed (backend, thread_id).
+# Evicted and invalidated clients have their transport closed.
 _CACHED_CLIENTS = _providers.LRU(
     _create_sftpclient, maxsize=128, on_evict=_close_sftpclient
 )
@@ -367,28 +365,36 @@ def _close_clients_of_ended_threads() -> None:
     them again, and the LRU would only close one when it evicts it."""
     running = {thread.ident for thread in _thread.enumerate()}
     for key in list(_CACHED_CLIENTS.cache):
-        if key[2] not in running:
+        if key[1] not in running:
             _CACHED_CLIENTS.discard(*key)
 
 
-class SftpBackend(_checkfile.CheckFileSftpBackend):
-    """Connects via `paramiko.SSHClient` using `connect_opts` merged with
-    the `Source`'s host/port/userinfo. `client()` caches per
-    `(self, source, calling-thread)` -- see `_CACHED_CLIENTS` above -- and
-    replaces (and closes) a cached client whose connection has dropped;
-    `close()` closes every connection the backend opened.
+def _rebuild_backend(cls, state):
+    return cls(**state)
 
-    Host keys are verified by default. `known_hosts` (default: the user's
-    `~/.ssh/known_hosts` plus any ssh_config `UserKnownHostsFile` for the
-    host; `None` loads no file; a path or iterable of paths loads exactly
-    those) is loaded read-only, and `hostkeypolicy` (default
-    `paramiko.RejectPolicy()`) decides what happens to a key found in none
-    of them. A key that differs from a known one always raises
-    `SftpHostKeyError`, as one the policy refuses does. **Opt-out**, in code
-    only:
-    `SftpBackend(connect_opts, paramiko.AutoAddPolicy(), known_hosts=None)`
+
+class SFTPBackend(_checkfile.CheckFileSFTPBackend):
+    """The connections to one SFTP server and account, on `paramiko.SSHClient`:
+    `connect_opts` merged with `host`, `port`, `user` and `password`.
+    Nothing connects when the backend is built. `client()` caches per
+    `(self, calling thread)` -- see `_CACHED_CLIENTS` above -- and replaces
+    (and closes) a cached client whose connection has dropped; `close()`
+    closes every connection the backend opened, on any thread, and is
+    harmless when called again.
+
+    `host` may be a name from the user's ssh_config: `HostName`, `Port`,
+    `User` and `IdentityFile` of the matching block apply where the caller
+    named no `port`, `user` or key. Host keys are verified by default.
+    `known_hosts` (default: the user's `~/.ssh/known_hosts` plus any
+    ssh_config `UserKnownHostsFile` for the host; `None` loads no file; a path
+    or iterable of paths loads exactly those) is loaded read-only, and
+    `hostkeypolicy` (default `paramiko.RejectPolicy()`) decides what happens
+    to a key found in none of them. A key that differs from a known one
+    always raises `SFTPHostKeyError`, as one the policy refuses does.
+    **Opt-out**, in code only:
+    `SFTPBackend(host, hostkeypolicy=paramiko.AutoAddPolicy(), known_hosts=None)`
     accepts any server key -- a network man-in-the-middle then receives the
-    URI password.
+    password.
 
     `timeout` (default 30 s) is the default for paramiko's `timeout`,
     `banner_timeout`, `auth_timeout` and `channel_timeout` connect options;
@@ -402,6 +408,10 @@ class SftpBackend(_checkfile.CheckFileSftpBackend):
     an equivalent `ProxyCommand`."""
 
     __slots__ = (
+        "host",
+        "port",
+        "user",
+        "password",
         "connect_opts",
         "hostkeypolicy",
         "ssh_config",
@@ -423,13 +433,23 @@ class SftpBackend(_checkfile.CheckFileSftpBackend):
 
     def __init__(
         self,
+        host: str,
+        port: "int | None" = None,
+        *,
+        user: "str | None" = None,
+        password: "str | None" = None,
         connect_opts=None,
         hostkeypolicy=None,
-        ssh_config=_DEFAULT_SSH_CONFIG,
-        *,
+        ssh_config=DEFAULT_SSH_CONFIG,
         known_hosts=_DEFAULT_KNOWN_HOSTS,
         timeout: "float | None" = DEFAULT_TIMEOUT,
     ) -> None:
+        if not host:
+            raise ValueError("an SFTP backend needs a host")
+        self.host = str(host)
+        self.port = None if port is None else int(port)
+        self.user = user
+        self.password = password
         self.connect_opts = {} if connect_opts is None else connect_opts
         self.hostkeypolicy = (
             _paramiko.RejectPolicy() if hostkeypolicy is None else hostkeypolicy
@@ -438,26 +458,58 @@ class SftpBackend(_checkfile.CheckFileSftpBackend):
         self.known_hosts = known_hosts
         self.timeout = timeout
 
-    def opts(self, source: Source):
-        _check_host(source.host)
-        host = str(source.host)
+    @property
+    def endpoint(self) -> SFTPEndpoint:
+        return SFTPEndpoint(self.host.lower(), self.port, self.user)
+
+    def __repr__(self) -> str:
+        shown = [repr(self.host)]
+        if self.port is not None:
+            shown.append(str(self.port))
+        if self.user is not None:
+            shown.append(f"user={self.user!r}")
+        return f"{type(self).__name__}({', '.join(shown)})"
+
+    def __reduce__(self):
+        return (
+            _rebuild_backend,
+            (
+                type(self),
+                {
+                    "host": self.host,
+                    "port": self.port,
+                    "user": self.user,
+                    "password": self.password,
+                    "connect_opts": self.connect_opts,
+                    "hostkeypolicy": self.hostkeypolicy,
+                    "ssh_config": self.ssh_config,
+                    "known_hosts": self.known_hosts,
+                    "timeout": self.timeout,
+                },
+            ),
+        )
+
+    def opts(self):
+        """The keyword arguments `SSHClient.connect()` is called with: the
+        `connect_opts` merged with the ssh_config of the host (a
+        `ProxyCommand` starts its process here)."""
+        _check_host(self.host)
+        host = self.host
         config = _lookup_ssh_config(host, self.ssh_config)
         connect_ops = {
             **self.connect_opts,
             "hostname": config.get("hostname", host),
-            "port": source.port
-            or int(config.get("port", _netimps.get_default_port("sftp"))),
+            "port": self.port or int(config.get("port", DEFAULT_PORT)),
         }
         if self.timeout is not None:
             for key in ("timeout", "banner_timeout", "auth_timeout", "channel_timeout"):
                 connect_ops.setdefault(key, self.timeout)
-        user, password = source.parsed_userinfo()
-        if user:
-            connect_ops["username"] = user
+        if self.user:
+            connect_ops["username"] = self.user
         elif "username" not in connect_ops and "user" in config:
             connect_ops["username"] = str(config["user"])
-        if password:
-            connect_ops["password"] = password
+        if self.password:
+            connect_ops["password"] = self.password
         if "key_filename" not in connect_ops and "identityfile" in config:
             connect_ops["key_filename"] = list(config["identityfile"])
         if "sock" not in connect_ops:
@@ -475,13 +527,13 @@ class SftpBackend(_checkfile.CheckFileSftpBackend):
                 # Connecting directly would silently bypass the jump host.
                 raise NotImplementedError(
                     f"ssh_config ProxyJump ({config['proxyjump']}) for host "
-                    f"{source.host!r} is not supported by the paramiko SFTP "
-                    "backend -- use the asyncssh backend ('sftp-async' extra), "
+                    f"{self.host!r} is not supported by the paramiko SFTP "
+                    "backend -- use the asyncssh backend ('asyncssh' extra), "
                     "an equivalent ProxyCommand, or connect_opts['sock']"
                 )
         return connect_ops
 
-    def _known_hosts_files(self, source: Source) -> "list[str]":
+    def _known_hosts_files(self) -> "list[str]":
         known_hosts = self.known_hosts
         if known_hosts is None:
             return []
@@ -489,21 +541,22 @@ class SftpBackend(_checkfile.CheckFileSftpBackend):
             if isinstance(known_hosts, (str, _pathlib.PurePath)):
                 return [str(known_hosts)]
             return [str(path) for path in known_hosts]
-        _check_host(source.host)
+        _check_host(self.host)
         home = str(_pathlib.Path.home())
         files = [str(_pathlib.Path(home, ".ssh", "known_hosts"))]
-        config = _lookup_ssh_config(str(source.host), self.ssh_config)
+        config = _lookup_ssh_config(self.host, self.ssh_config)
         for value in str(config.get("userknownhostsfile") or "").split():
             if value.lower() != "none":
                 files.append(str(_pathlib.Path(value.replace("%d", home)).expanduser()))
         # Default locations are optional; explicitly named files are not.
         return [path for path in files if _pathlib.Path(path).is_file()]
 
-    def transport(self, source: Source) -> _paramiko.Transport:
-        opts = self.opts(source)
+    def transport(self) -> _paramiko.Transport:
+        """Connects and returns the `paramiko.Transport`."""
+        opts = self.opts()
         client = _paramiko.SSHClient()
         try:
-            for path in self._known_hosts_files(source):
+            for path in self._known_hosts_files():
                 # load_system_host_keys(): read-only, never written back --
                 # an AutoAddPolicy must not edit the user's files either.
                 client.load_system_host_keys(path)
@@ -522,19 +575,19 @@ class SftpBackend(_checkfile.CheckFileSftpBackend):
                     sock.close()
                 except Exception:
                     pass
-            translated = _connect_error(error, source)
+            translated = _connect_error(error, self.endpoint)
             if translated is None:
                 raise
             raise translated from None
         return transport
 
-    def client(self, source: Source):
+    def client(self):
         thread_id = _thread.get_ident()
-        if (self, source, thread_id) not in _CACHED_CLIENTS.cache:
+        if (self, thread_id) not in _CACHED_CLIENTS.cache:
             _close_clients_of_ended_threads()
-        client = _CACHED_CLIENTS(self, source, thread_id)
+        client = _CACHED_CLIENTS(self, thread_id)
         if not _client_is_alive(client):
-            client = _CACHED_CLIENTS.invalidate(self, source, thread_id)
+            client = _CACHED_CLIENTS.invalidate(self, thread_id)
         return client
 
     def close(self) -> None:
@@ -564,7 +617,3 @@ class SftpBackend(_checkfile.CheckFileSftpBackend):
                 f"{msg_type!r} (server likely doesn't support this extension)"
             )
         return msg.get_remainder()
-
-    @classmethod
-    def default(cls, ssh_config=_DEFAULT_SSH_CONFIG) -> "SftpBackend":
-        return cls({}, None, ssh_config=ssh_config)

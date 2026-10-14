@@ -1,25 +1,22 @@
 """The exceptions both SSH libraries raise for a connection, a login or a host
-key, as the `OSError` subclasses `SftpPath` raises instead.
+key, as the `OSError` subclasses `SFTPPath` raises instead.
 
 Neither SSH library is imported here: each backend decides which of its own
 exceptions is which and builds the result with these functions, so a failure
 reads the same on both. The library exception is never chained: its text can
 carry credentials. The text of the library exceptions that `aborted()` and
 `request_failed()` reduce to a class name is logged at DEBUG on the logger
-`pathlib_next.sftp`.
+`sftppath`.
 """
 
 from __future__ import annotations
 
 import errno as _errno
 import logging as _logging
-import typing as _ty
 
-if _ty.TYPE_CHECKING:
-    from ... import Source
+from .exceptions import SFTPAuthenticationError, SFTPHostKeyError
 
-
-_logger = _logging.getLogger("pathlib_next.sftp")
+_logger = _logging.getLogger("sftppath")
 
 
 def _log_library_error(what: str, library_error: BaseException) -> None:
@@ -28,21 +25,15 @@ def _log_library_error(what: str, library_error: BaseException) -> None:
     _logger.debug("%s: %s: %s", what, type(library_error).__name__, library_error)
 
 
-class SftpAuthenticationError(PermissionError):
-    """The server refused the credentials offered (`errno.EACCES`)."""
-
-
-class SftpHostKeyError(ConnectionError):
-    """The server's host key was unknown, changed or not accepted, so no
-    credential was sent (`errno.ECONNABORTED`)."""
-
-
-def _where(source: "Source | None") -> str:
-    if not source or not source.host:
+def _where(endpoint: "object | None") -> str:
+    """The server an error is about, from anything with `host`, `port` and
+    `user` attributes (an `SFTPEndpoint`): never a password."""
+    host = getattr(endpoint, "host", None)
+    if not host:
         return "the SFTP server"
-    user, _password = source.parsed_userinfo()
-    port = f":{source.port}" if source.port else ""
-    return f"{user + '@' if user else ''}{source.host}{port}"
+    user = getattr(endpoint, "user", None)
+    port = getattr(endpoint, "port", None)
+    return f"{user + '@' if user else ''}{host}{f':{port}' if port else ''}"
 
 
 def os_error(
@@ -58,7 +49,8 @@ def os_error(
     if filename is None:
         return cls(code, strerror)
     result = cls(code, strerror, filename)
-    result.filename2 = filename2
+    if filename2 is not None:
+        result.filename2 = filename2
     return result
 
 
@@ -66,12 +58,13 @@ def bare_failure(
     message: str, filename: "str | None" = None, filename2: "str | None" = None
 ) -> OSError:
     """An `OSError` without an errno, for a status that has no POSIX
-    equivalent: `SftpPath` reads `errno is None` as "consult the entry
+    equivalent: `SFTPPath` reads `errno is None` as "consult the entry
     itself"."""
     if filename is None:
         return OSError(message)
     result = OSError(None, message, filename)
-    result.filename2 = filename2
+    if filename2 is not None:
+        result.filename2 = filename2
     return result
 
 
@@ -98,14 +91,14 @@ def request_failed(library_error: BaseException) -> OSError:
     return OSError(_errno.EIO, f"SFTP request failed ({type(library_error).__name__})")
 
 
-def login_refused(source: "Source | None" = None) -> SftpAuthenticationError:
-    return SftpAuthenticationError(
-        _errno.EACCES, f"SFTP authentication to {_where(source)} was refused"
+def login_refused(endpoint: "object | None" = None) -> SFTPAuthenticationError:
+    return SFTPAuthenticationError(
+        _errno.EACCES, f"SFTP authentication to {_where(endpoint)} was refused"
     )
 
 
-def host_key_refused(source: "Source | None" = None) -> SftpHostKeyError:
-    return SftpHostKeyError(
+def host_key_refused(endpoint: "object | None" = None) -> SFTPHostKeyError:
+    return SFTPHostKeyError(
         _errno.ECONNABORTED,
-        f"the host key of {_where(source)} is unknown, changed or not accepted",
+        f"the host key of {_where(endpoint)} is unknown, changed or not accepted",
     )

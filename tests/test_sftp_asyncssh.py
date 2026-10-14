@@ -1,20 +1,56 @@
-"""Unit-only asyncssh SFTP backend tests: error translation, the SFTPAttrs
--> st_*-shaped stat adapter, and backend-selection precedence. Mirrors
-test_sftp.py's paramiko coverage for the pieces that are asyncssh-specific;
-end-to-end behavior (real read/write/mkdir/rename/... against a live
-server) is covered by TestSftpContract's "asyncssh" param in
-test_contract.py.
+"""The asyncssh backend: error translation, the SFTPAttrs -> st_*-shaped stat
+adapter, the connect options, backend selection (the `SFTPPATH_BACKEND`
+variable, `_default_backend_cls`, `backend=`), the lazy imports, and the
+concurrent recursive copy and remove, against fake clients and against the
+in-process server of the `sftp_server` fixture.
+
+The end-to-end behaviour of a path (read, write, mkdir, rename, ...) on a live
+server is covered by the contract suite in `test_contract.py`.
 """
 
+import asyncio
+import contextlib
+import errno
+import importlib.util
+import os
 import stat
+import subprocess
+import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
 
 asyncssh = pytest.importorskip("asyncssh")
 
-from pathlib_next.uri import Source
-from pathlib_next.uri.schemes.sftp import _asyncssh as backend_mod
+import sftppath  # noqa: E402
+from sftp_support import make_backend, make_path  # noqa: E402
+from sftppath import (  # noqa: E402
+    AsyncSSHBackend,
+    BaseSFTPBackend,
+    SFTPEndpoint,
+    SFTPPath,
+    _select,
+)
+from sftppath._asyncssh import _backend as backend_mod  # noqa: E402
+from sftppath._asyncssh import _loop as loop_mod  # noqa: E402
+from sftppath._asyncssh._attrs import _StatAdapter  # noqa: E402
+from sftppath._asyncssh._client import _SyncSFTPClient  # noqa: E402
+from sftppath._asyncssh._connect import _aconnect  # noqa: E402
+from sftppath._asyncssh._translate import (  # noqa: E402
+    _reraise_sftp_errors,
+    _translate,
+)
+from sftppath._asyncssh._walk import _concurrent_copy, _concurrent_rm  # noqa: E402
+
+_HAS_PARAMIKO = importlib.util.find_spec("paramiko") is not None
+_needs_paramiko = pytest.mark.skipif(
+    not _HAS_PARAMIKO, reason="paramiko not installed (asyncssh-only install)"
+)
+
+#: How long a test waits for a walk that is held on purpose before it fails
+#: instead of hanging the run. It is a limit on a deadlock, not on speed.
+_HANG_GUARD = 60
 
 # --- error translation -------------------------------------------------
 
@@ -31,20 +67,18 @@ from pathlib_next.uri.schemes.sftp import _asyncssh as backend_mod
     ],
 )
 def test_translate_maps_typed_errors(error, expected_type):
-    result = backend_mod._translate(error)
+    result = _translate(error)
     assert isinstance(result, expected_type)
 
 
 def test_translate_dir_not_empty_sets_enotempty_errno():
-    import errno
-
-    result = backend_mod._translate(asyncssh.SFTPDirNotEmpty("not empty"))
+    result = _translate(asyncssh.SFTPDirNotEmpty("not empty"))
     assert isinstance(result, OSError)
     assert result.errno == errno.ENOTEMPTY
 
 
 def test_reraise_sftp_errors_translates_without_chaining():
-    @backend_mod._reraise_sftp_errors
+    @_reraise_sftp_errors
     def _raises():
         raise asyncssh.SFTPNoSuchFile("gone")
 
@@ -55,7 +89,7 @@ def test_reraise_sftp_errors_translates_without_chaining():
 
 
 def test_reraise_sftp_errors_passes_through_other_exceptions():
-    @backend_mod._reraise_sftp_errors
+    @_reraise_sftp_errors
     def _raises():
         raise ValueError("unrelated")
 
@@ -71,27 +105,27 @@ def _attrs(**kwargs):
 
 
 def test_stat_adapter_v3_style_combined_permissions():
-    # v3 servers (and asyncssh's own bundled SFTPServer, verified
-    # empirically) pack S_IFMT type bits directly into `.permissions`.
+    # v3 servers (and asyncssh's own bundled SFTPServer) pack the S_IFMT type
+    # bits directly into `.permissions`.
     attrs = _attrs(type=asyncssh.FILEXFER_TYPE_REGULAR, permissions=0o100644, size=42)
-    adapted = backend_mod._StatAdapter(attrs)
+    adapted = _StatAdapter(attrs)
     assert adapted.st_mode == 0o100644
     assert stat.S_ISREG(adapted.st_mode)
     assert adapted.st_size == 42
 
 
 def test_stat_adapter_v4_style_bare_permissions_combined_with_type():
-    # Defensive path: a genuine v4+ server that reports only the bare
-    # permission bits, with the type carried separately in `.type`.
+    # A v4+ server may report only the bare permission bits, with the type
+    # carried separately in `.type`.
     attrs = _attrs(type=asyncssh.FILEXFER_TYPE_DIRECTORY, permissions=0o755)
-    adapted = backend_mod._StatAdapter(attrs)
+    adapted = _StatAdapter(attrs)
     assert stat.S_ISDIR(adapted.st_mode)
     assert stat.S_IMODE(adapted.st_mode) == 0o755
 
 
 def test_stat_adapter_symlink_type_bit():
     attrs = _attrs(type=asyncssh.FILEXFER_TYPE_SYMLINK, permissions=0o120777)
-    adapted = backend_mod._StatAdapter(attrs)
+    adapted = _StatAdapter(attrs)
     assert stat.S_ISLNK(adapted.st_mode)
 
 
@@ -99,7 +133,7 @@ def test_stat_adapter_none_fields_default_to_zero_not_none():
     # SFTPAttrs' numeric fields can be None (not just absent) -- a naive
     # `getattr(attrs, 'size', 0)` would return None here, not 0.
     attrs = _attrs()
-    adapted = backend_mod._StatAdapter(attrs)
+    adapted = _StatAdapter(attrs)
     assert adapted.st_size == 0
     assert adapted.st_uid == 0
     assert adapted.st_gid == 0
@@ -111,7 +145,7 @@ def test_stat_adapter_none_fields_default_to_zero_not_none():
 
 def test_stat_adapter_filename_from_readdir_entry():
     attrs = _attrs(type=asyncssh.FILEXFER_TYPE_REGULAR, permissions=0o100644)
-    adapted = backend_mod._StatAdapter(attrs, filename="a.txt")
+    adapted = _StatAdapter(attrs, filename="a.txt")
     assert adapted.filename == "a.txt"
 
 
@@ -119,7 +153,7 @@ def test_filestat_from_stat_adapter_roundtrip():
     from pathlib_next import FileStat
 
     attrs = _attrs(type=asyncssh.FILEXFER_TYPE_DIRECTORY, permissions=0o40755, size=0)
-    adapted = backend_mod._StatAdapter(attrs)
+    adapted = _StatAdapter(attrs)
     fs = FileStat.from_stat(adapted)
     assert fs.is_dir()
     assert not fs.is_file()
@@ -130,185 +164,284 @@ def test_filestat_from_stat_adapter_roundtrip():
 
 @pytest.fixture(autouse=True)
 def _reset_backend_resolution(monkeypatch):
-    # _resolve_default_backend_cls() caches its result module-globally --
-    # isolate each test from that cache and from the real process env.
-    monkeypatch.delenv(
-        sftp_pkg.__dict__.get("_ENV_VAR", "PATHLIB_NEXT_SFTP_BACKEND"), raising=False
-    )
-    yield
+    # `_resolve_default_backend_cls()` caches its result module-globally:
+    # isolate each test from that cache, from what an earlier test left in it,
+    # and from the real process environment.
+    monkeypatch.delenv(_select._ENV_VAR, raising=False)
+    monkeypatch.setattr(_select, "_resolved_backend_cls", None)
 
 
-from pathlib_next.uri.schemes import sftp as sftp_pkg  # noqa: E402
-
-import importlib.util as _importutil  # noqa: E402
-
-_HAS_PARAMIKO = _importutil.find_spec("paramiko") is not None
-_needs_paramiko = pytest.mark.skipif(
-    not _HAS_PARAMIKO, reason="paramiko not installed (asyncssh-only install)"
-)
-
-
-def test_resolve_default_backend_auto_prefers_asyncssh(monkeypatch):
-    monkeypatch.delenv(sftp_pkg._ENV_VAR, raising=False)
-    cls = sftp_pkg._resolve_default_backend_cls(reload=True)
-    assert cls is backend_mod.AsyncsshSftpBackend
+def test_resolve_default_backend_auto_prefers_asyncssh():
+    cls = _select._resolve_default_backend_cls(reload=True)
+    assert cls is AsyncSSHBackend
 
 
 @_needs_paramiko
 def test_resolve_default_backend_explicit_paramiko(monkeypatch):
-    monkeypatch.setenv(sftp_pkg._ENV_VAR, "paramiko")
-    cls = sftp_pkg._resolve_default_backend_cls(reload=True)
-    assert cls is sftp_pkg.SftpBackend
+    monkeypatch.setenv(_select._ENV_VAR, "paramiko")
+    cls = _select._resolve_default_backend_cls(reload=True)
+    assert cls is sftppath.SFTPBackend
 
 
 def test_resolve_default_backend_explicit_asyncssh(monkeypatch):
-    monkeypatch.setenv(sftp_pkg._ENV_VAR, "asyncssh")
-    cls = sftp_pkg._resolve_default_backend_cls(reload=True)
-    assert cls is backend_mod.AsyncsshSftpBackend
+    monkeypatch.setenv(_select._ENV_VAR, "asyncssh")
+    cls = _select._resolve_default_backend_cls(reload=True)
+    assert cls is AsyncSSHBackend
 
 
 def test_resolve_default_backend_invalid_value_raises(monkeypatch):
-    monkeypatch.setenv(sftp_pkg._ENV_VAR, "not-a-backend")
+    monkeypatch.setenv(_select._ENV_VAR, "not-a-backend")
     with pytest.raises(ValueError, match="not-a-backend"):
-        sftp_pkg._resolve_default_backend_cls(reload=True)
+        _select._resolve_default_backend_cls(reload=True)
 
 
 def test_resolve_default_backend_asyncssh_unavailable_raises_importerror(monkeypatch):
-    monkeypatch.setenv(sftp_pkg._ENV_VAR, "asyncssh")
-    monkeypatch.delitem(sftp_pkg._BACKEND_REGISTRY, "asyncssh", raising=False)
-    monkeypatch.setattr(sftp_pkg, "_asyncssh_probed", True)  # skip the real probe
-    with pytest.raises(ImportError, match="sftp-async"):
-        sftp_pkg._resolve_default_backend_cls(reload=True)
+    monkeypatch.setenv(_select._ENV_VAR, "asyncssh")
+    monkeypatch.delitem(_select._BACKEND_REGISTRY, "asyncssh", raising=False)
+    monkeypatch.setattr(_select, "_asyncssh_probed", True)  # skip the real probe
+    with pytest.raises(ImportError, match=r"sftppath\[asyncssh\]"):
+        _select._resolve_default_backend_cls(reload=True)
 
 
 def test_resolve_default_backend_result_is_cached(monkeypatch):
-    # asyncssh first (always available in this test module), then flip the env
-    # and confirm no-reload returns the cached asyncssh result.
-    monkeypatch.setenv(sftp_pkg._ENV_VAR, "asyncssh")
-    first = sftp_pkg._resolve_default_backend_cls(reload=True)
-    monkeypatch.setenv(sftp_pkg._ENV_VAR, "auto")
-    second = sftp_pkg._resolve_default_backend_cls()  # no reload -- cached
-    assert first is second is backend_mod.AsyncsshSftpBackend
+    # asyncssh first, then flip the variable and confirm that a resolve
+    # without `reload` returns the cached result.
+    monkeypatch.setenv(_select._ENV_VAR, "asyncssh")
+    first = _select._resolve_default_backend_cls(reload=True)
+    monkeypatch.setenv(_select._ENV_VAR, "auto")
+    second = _select._resolve_default_backend_cls()  # no reload -- cached
+    assert first is second is AsyncSSHBackend
+
+
+@pytest.mark.parametrize("value", [None, "auto", "asyncssh", "paramiko"])
+def test_a_path_builds_the_backend_class_the_environment_names(monkeypatch, value):
+    if value == "paramiko":
+        pytest.importorskip("paramiko")
+    if value is not None:
+        monkeypatch.setenv(_select._ENV_VAR, value)
+
+    path = SFTPPath("/a", host="Example", port=2222, user="u")
+
+    expected = sftppath.SFTPBackend if value == "paramiko" else AsyncSSHBackend
+    assert type(path.backend) is expected
+    assert path.backend.endpoint == SFTPEndpoint("example", 2222, "u")
+
+
+def test_a_path_with_an_unrecognized_environment_value_raises(monkeypatch):
+    monkeypatch.setenv(_select._ENV_VAR, "not-a-backend")
+    with pytest.raises(ValueError, match="not-a-backend"):
+        SFTPPath("/a", host="h")
 
 
 @_needs_paramiko
 def test_default_backend_cls_class_attribute_wins_over_env(monkeypatch):
-    monkeypatch.setenv(sftp_pkg._ENV_VAR, "asyncssh")
+    monkeypatch.setenv(_select._ENV_VAR, "asyncssh")
 
-    class _PinnedSftpPath(sftp_pkg.SftpPath):
-        _default_backend_cls = sftp_pkg.SftpBackend
-        __SCHEMES = ()  # avoid registering a second sftp: scheme
+    class _PinnedPath(SFTPPath):
+        _default_backend_cls = sftppath.SFTPBackend
 
-    inst = _PinnedSftpPath.__new__(_PinnedSftpPath)
-    backend = inst._initbackend()
-    assert isinstance(backend, sftp_pkg.SftpBackend)
+    path = _PinnedPath("/a", host="h")
 
-
-def test_sftp_scheme_imports_and_resolves_without_paramiko():
-    """Regression: an asyncssh-only install (no paramiko) must still import
-    SftpPath and auto-resolve to the asyncssh backend.
-
-    Runs in a subprocess with ``paramiko`` masked (blocked in sys.modules) so the
-    guard holds even in a CI env where paramiko happens to be installed. Before
-    the fix, ``uri/schemes/sftp/__init__`` imported ``._paramiko`` eagerly, so
-    merely importing ``SftpPath`` raised ModuleNotFoundError without paramiko.
-    """
-    import subprocess
-    import sys
-    import textwrap
-
-    script = textwrap.dedent("""
-        import sys
-        # Make `import paramiko` fail, simulating an asyncssh-only install.
-        sys.modules["paramiko"] = None
-        from pathlib_next.uri.schemes.sftp import SftpPath
-        from pathlib_next.uri.schemes import sftp as pkg
-        sp = SftpPath("sftp://root@h:22/etc/hosts")
-        assert sp.source.host == "h" and sp.path == "/etc/hosts"
-        cls = pkg._resolve_default_backend_cls(reload=True)
-        assert cls.__name__ == "AsyncsshSftpBackend", cls
-        print("OK")
-        """)
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "OK" in result.stdout
+    assert isinstance(path.backend, sftppath.SFTPBackend)
+    assert type(SFTPPath("/a", host="h").backend) is AsyncSSHBackend
 
 
 def test_explicit_backend_kwarg_wins_over_everything(monkeypatch):
-    monkeypatch.setenv(sftp_pkg._ENV_VAR, "asyncssh")
-    explicit = backend_mod.AsyncsshSftpBackend()
-    p = sftp_pkg.SftpPath("sftp://host/a", backend=explicit)
-    assert p.backend is explicit
+    class _Unbuildable(BaseSFTPBackend):
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("a backend was built although backend= was given")
+
+    class _PinnedPath(SFTPPath):
+        _default_backend_cls = _Unbuildable
+
+    monkeypatch.setenv(_select._ENV_VAR, "asyncssh")
+    explicit = AsyncSSHBackend("host")
+
+    assert _PinnedPath("/a", backend=explicit).backend is explicit
+    assert SFTPPath("/a", backend=explicit).backend is explicit
 
 
-def test_asyncssh_getattr_is_lazy_and_reexports():
-    # PEP 562 module __getattr__ -- accessing the name imports _asyncssh
-    # lazily; already imported here via backend_mod, so this just checks
-    # the re-export resolves to the same class.
-    assert sftp_pkg.AsyncsshSftpBackend is backend_mod.AsyncsshSftpBackend
+def test_asyncssh_getattr_reexports_the_backend():
+    assert sftppath.AsyncSSHBackend is backend_mod.AsyncSSHBackend
+
+
+@_needs_paramiko
+def test_paramiko_getattr_reexports_the_backend():
+    from sftppath import _paramiko
+
+    assert sftppath.SFTPBackend is _paramiko.SFTPBackend
 
 
 def test_asyncssh_getattr_unknown_name_raises_attributeerror():
     with pytest.raises(AttributeError):
-        sftp_pkg.__getattr__("NotARealAttribute")
+        sftppath.NotARealAttribute
+    with pytest.raises(AttributeError):
+        sftppath.__getattr__("NotARealAttribute")
+
+
+# --- lazy imports, in a child interpreter ---------------------------------
+
+
+def _tree_of(module):
+    """The directory a module's top-level package sits in."""
+    return os.path.dirname(os.path.dirname(module.__file__))
+
+
+def _child(*args, **env_overrides):
+    """Run `python -c <args[0]> <args[1:]>` in a fresh interpreter that imports
+    the same `sftppath` (and `pathlib_next`) this test runs against and has the
+    PYTHONPATH of this process after them; `SFTPPATH_BACKEND` is unset unless
+    `env_overrides` gives it."""
+    import pathlib_next
+
+    env = dict(os.environ)
+    env.pop(_select._ENV_VAR, None)
+    env.update(env_overrides)
+    trees = [_tree_of(sftppath), _tree_of(pathlib_next)]
+    if importlib.util.find_spec("uripath") is not None:
+        import uripath
+
+        trees.append(_tree_of(uripath))
+    inherited = [env["PYTHONPATH"]] if env.get("PYTHONPATH") else []
+    env["PYTHONPATH"] = os.pathsep.join([*dict.fromkeys(trees), *inherited])
+    return subprocess.run(
+        [sys.executable, "-c", *args],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=_HANG_GUARD * 2,
+    )
+
+
+_LOADED_SCRIPT = """
+import importlib, sys
+importlib.import_module(sys.argv[1])
+roots = {name.split(".")[0] for name in sys.modules}
+print("loaded:", sorted(roots.intersection(sys.argv[2:])))
+"""
+
+
+@pytest.mark.parametrize(
+    "module, forbidden",
+    [
+        ("sftppath", ["paramiko", "asyncssh", "uripath"]),
+        ("sftppath.uri", ["paramiko", "asyncssh"]),
+    ],
+)
+def test_importing_sftppath_loads_no_ssh_library(module, forbidden):
+    if module == "sftppath.uri":
+        pytest.importorskip("uripath")
+
+    result = _child(_LOADED_SCRIPT, module, *forbidden)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "loaded: []"
+
+
+_BUILD_SCRIPT = """
+import sys
+import sftppath
+path = sftppath.SFTPPath("/etc/hosts", host="h", port=22, user="root")
+roots = {name.split(".")[0] for name in sys.modules}
+print(type(path.backend).__name__, sorted(roots.intersection(("paramiko", "asyncssh"))))
+"""
+
+
+@pytest.mark.parametrize(
+    "value, backend_name, library",
+    [
+        ("asyncssh", "AsyncSSHBackend", "asyncssh"),
+        ("paramiko", "SFTPBackend", "paramiko"),
+    ],
+)
+def test_building_a_path_imports_only_the_library_of_its_backend(
+    value, backend_name, library
+):
+    pytest.importorskip(library)
+
+    result = _child(_BUILD_SCRIPT, **{_select._ENV_VAR: value})
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"{backend_name} ['{library}']"
+
+
+_WITHOUT_PARAMIKO_SCRIPT = """
+import sys
+# Make `import paramiko` fail, as on an install without the paramiko extra.
+sys.modules["paramiko"] = None
+import sftppath
+path = sftppath.SFTPPath("/etc/hosts", host="h", port=22, user="root")
+assert type(path.backend).__name__ == "AsyncSSHBackend", type(path.backend)
+assert path.backend.endpoint == sftppath.SFTPEndpoint("h", 22, "root")
+print("OK")
+"""
+
+
+def test_a_path_builds_the_asyncssh_backend_without_paramiko_installed():
+    """Runs with `paramiko` masked in `sys.modules`, so the guarantee holds
+    even where paramiko happens to be installed."""
+    result = _child(_WITHOUT_PARAMIKO_SCRIPT)
+
+    assert result.returncode == 0, result.stderr
+    assert "OK" in result.stdout
 
 
 # --- capability flags -------------------------------------------------
 
 
-def test_asyncssh_backend_supports_lchmod_and_hardlink():
-    backend = backend_mod.AsyncsshSftpBackend()
+def test_asyncssh_backend_supports_lchmod_hardlink_and_tree():
+    backend = AsyncSSHBackend("h")
     assert backend.supports_lchmod is True
     assert backend.supports_hardlink is True
+    assert backend.supports_tree is True
 
 
 @_needs_paramiko
-def test_paramiko_backend_does_not_support_lchmod_or_hardlink():
-    assert sftp_pkg.SftpBackend.supports_lchmod is False
-    assert sftp_pkg.SftpBackend.supports_hardlink is False
+def test_paramiko_backend_does_not_support_lchmod_hardlink_or_tree():
+    assert sftppath.SFTPBackend.supports_lchmod is False
+    assert sftppath.SFTPBackend.supports_hardlink is False
+    assert sftppath.SFTPBackend.supports_tree is False
 
 
-def test_hardlink_to_raises_immediately_on_paramiko_no_round_trip(monkeypatch):
-    calls = []
+@pytest.mark.parametrize("target", ["/b", "path"])
+def test_hardlink_to_raises_immediately_without_hardlink_support(target):
+    class _NoHardlinkBackend(BaseSFTPBackend):
+        def __init__(self):
+            self.calls = []
 
-    class _FakeParamikoBackend(sftp_pkg.BaseSftpBackend):
-        def client(self, source):
-            calls.append(source)
+        def client(self):
+            self.calls.append("client")
             raise AssertionError("client() should not be called")
 
-    p = sftp_pkg.SftpPath("sftp://host/a", backend=_FakeParamikoBackend())
+    backend = _NoHardlinkBackend()
+    path = SFTPPath("/a", backend=backend)
+    if target == "path":
+        target = SFTPPath("/b", backend=backend)
+
     with pytest.raises(NotImplementedError):
-        p.hardlink_to("sftp://host/b")
-    assert calls == []
+        path.hardlink_to(target)
+    assert backend.calls == []
 
 
-# --- concurrent copy tests -----------------------------------------------
+# --- backend options ---------------------------------------------------------
 
 
 def test_asyncssh_backend_has_max_concurrency():
-    backend = backend_mod.AsyncsshSftpBackend(max_concurrency=16)
+    backend = AsyncSSHBackend("h", max_concurrency=16)
     assert backend.max_concurrency == 16
 
 
 def test_asyncssh_backend_max_concurrency_defaults_to_16():
-    # Raised from 8 to 16 in 0.8.3 (loopback recursive-copy sweep); see
-    # DEFAULT_MAX_CONCURRENCY's rationale in _asyncssh.py.
-    backend = backend_mod.AsyncsshSftpBackend()
+    backend = AsyncSSHBackend("h")
     assert backend.max_concurrency == 16
-    assert (
-        backend.max_concurrency
-        == backend_mod.AsyncsshSftpBackend.DEFAULT_MAX_CONCURRENCY
-    )
+    assert backend.max_concurrency == AsyncSSHBackend.DEFAULT_MAX_CONCURRENCY
     assert "config" not in backend.connect_opts
 
 
 def test_asyncssh_backend_accepts_connect_opts_and_sftp_version():
-    backend = backend_mod.AsyncsshSftpBackend(
-        {"config": None, "client_keys": None},
+    backend = AsyncSSHBackend(
+        "h",
+        connect_opts={"config": None, "client_keys": None},
         max_concurrency=12,
         sftp_version=3,
     )
@@ -318,15 +451,32 @@ def test_asyncssh_backend_accepts_connect_opts_and_sftp_version():
 
 
 def test_asyncssh_backend_ssh_config_kwarg_is_backend_agnostic():
-    backend = backend_mod.AsyncsshSftpBackend(ssh_config=None)
+    backend = AsyncSSHBackend("h", ssh_config=None)
     assert backend.connect_opts["config"] is None
-    backend = backend_mod.AsyncsshSftpBackend(ssh_config=("a", "b"))
+    backend = AsyncSSHBackend("h", ssh_config=("a", "b"))
     assert backend.connect_opts["config"] == ("a", "b")
 
 
-def test_aconnect_merges_source_credentials_and_connect_opts(monkeypatch):
-    import asyncio
+def test_explicit_max_concurrency_overrides_default():
+    backend = AsyncSSHBackend("h", connect_opts={"config": None}, max_concurrency=4)
+    assert backend.max_concurrency == 4
+    assert (
+        AsyncSSHBackend(
+            "h", connect_opts={"config": None}, max_concurrency=1
+        ).max_concurrency
+        == 1
+    )
+    # 0 is honored as given (the async helpers clamp to >=1 at use time via
+    # `max(1, max_concurrency)`), not silently replaced by the default.
+    assert (
+        AsyncSSHBackend(
+            "h", connect_opts={"config": None}, max_concurrency=0
+        ).max_concurrency
+        == 0
+    )
 
+
+def test_aconnect_merges_endpoint_credentials_and_connect_opts(monkeypatch):
     calls = {}
 
     class _FakeConn:
@@ -334,17 +484,19 @@ def test_aconnect_merges_source_credentials_and_connect_opts(monkeypatch):
             calls["sftp_version"] = sftp_version
             return object()
 
-    async def _fake_connect(host, port, **kwargs):
+    async def _fake_connect(host, **kwargs):
         calls["host"] = host
-        calls["port"] = port
         calls["kwargs"] = kwargs
         return _FakeConn()
 
-    monkeypatch.setattr(backend_mod._asyncssh, "connect", _fake_connect)
+    monkeypatch.setattr(asyncssh, "connect", _fake_connect)
 
     entry = asyncio.run(
-        backend_mod._aconnect(
-            Source("sftp", "user:pass", "host", 2222),
+        _aconnect(
+            "host",
+            2222,
+            "user",
+            "pass",
             connect_opts={
                 "config": None,
                 "client_keys": None,
@@ -354,9 +506,9 @@ def test_aconnect_merges_source_credentials_and_connect_opts(monkeypatch):
             sftp_version=4,
         )
     )
-    assert isinstance(entry.client, backend_mod._SyncSftpClient)
+    assert isinstance(entry.client, _SyncSFTPClient)
     assert calls["host"] == "host"
-    assert calls["port"] == 2222
+    assert calls["kwargs"]["port"] == 2222
     assert calls["kwargs"]["config"] is None
     assert calls["kwargs"]["client_keys"] is None
     assert calls["kwargs"]["agent_path"] is None
@@ -369,38 +521,108 @@ def test_aconnect_merges_source_credentials_and_connect_opts(monkeypatch):
 
 
 def test_aconnect_passes_explicit_known_hosts_opt_out_through(monkeypatch):
-    import asyncio
-
     calls = {}
 
     class _FakeConn:
         async def start_sftp_client(self, *, sftp_version, path_errors):
             return object()
 
-    async def _fake_connect(host, port, **kwargs):
+    async def _fake_connect(host, **kwargs):
         calls["kwargs"] = kwargs
         return _FakeConn()
 
-    monkeypatch.setattr(backend_mod._asyncssh, "connect", _fake_connect)
-    backend = backend_mod.AsyncsshSftpBackend({"known_hosts": None})
-    asyncio.run(
-        backend_mod._aconnect(
-            Source("sftp", None, "host", 22), connect_opts=backend.connect_opts
-        )
-    )
+    monkeypatch.setattr(asyncssh, "connect", _fake_connect)
+    backend = AsyncSSHBackend("host", connect_opts={"known_hosts": None})
+    asyncio.run(_aconnect("host", 22, connect_opts=backend.connect_opts))
     assert "known_hosts" in calls["kwargs"]
     assert calls["kwargs"]["known_hosts"] is None
+
+
+# --- fake clients for the concurrent walks -----------------------------------
+
+
+def _sftp_attrs(is_dir):
+    permissions = 0o40755 if is_dir else 0o100644
+    file_type = (
+        asyncssh.FILEXFER_TYPE_DIRECTORY if is_dir else asyncssh.FILEXFER_TYPE_REGULAR
+    )
+    return asyncssh.SFTPAttrs(type=file_type, permissions=permissions)
+
+
+class _Requests:
+    """What a fake asyncssh client does around each request: counts the ones in
+    flight, fails or holds chosen ones, and can hold the requests of one kind
+    until enough of them have arrived.
+
+    `rendezvous=(kind, count)` makes every request of `kind` wait until `count`
+    of them are in flight together, so a walk that cannot get there stalls and
+    one that does is shown to allow it. `hang` is the set of `(kind, path)`
+    pairs that never return on their own, `fail` the set that raise a failure
+    status."""
+
+    def __init__(self, *, rendezvous=None, hang=(), fail=()):
+        self.rendezvous = rendezvous
+        self.hang = set(hang)
+        self.fail = set(fail)
+        self.active = 0
+        self.max_active = 0
+        self.entered = []
+        self._arrivals = 0
+        self._reached = None
+
+    @contextlib.asynccontextmanager
+    async def around(self, kind, path):
+        """One request: the fake's own work runs inside the `with`."""
+        key = (kind, path)
+        self.entered.append(key)
+        if key in self.fail:
+            raise asyncssh.SFTPFailure(path)
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            if key in self.hang:
+                await asyncio.Event().wait()
+            if self.rendezvous is not None and self.rendezvous[0] == kind:
+                await self._meet(self.rendezvous[1])
+            yield
+        finally:
+            self.active -= 1
+
+    async def _meet(self, count):
+        if self._reached is None:
+            self._reached = asyncio.Event()
+        self._arrivals += 1
+        if self._arrivals >= count:
+            self._reached.set()
+        await self._reached.wait()
+
+
+def _run_walk(coro):
+    """Run `coro` on a fresh loop. A walk still waiting after `_HANG_GUARD`
+    seconds for something the test never releases is cancelled and fails the
+    test with an `AssertionError`, whatever it was meant to raise."""
+
+    async def guarded():
+        task = asyncio.ensure_future(coro)
+        done, _ = await asyncio.wait({task}, timeout=_HANG_GUARD)
+        if not done:
+            task.cancel()
+            await asyncio.wait({task}, timeout=_HANG_GUARD)
+            raise AssertionError(f"the walk was still waiting after {_HANG_GUARD}s")
+        return task.result()
+
+    return asyncio.run(guarded())
 
 
 class _FakeAsyncCopyFile:
     def __init__(self, client, path, mode):
         self.client = client
         self.path = path
-        self.mode = mode
+        self.offset = 0
 
     async def read(self, size=-1):
-        data = self.client.files[self.path]
-        self.client.files[self.path] = b""
+        data = self.client.files[self.path][self.offset :]
+        self.offset += len(data)
         return data
 
     async def write(self, data):
@@ -411,7 +633,7 @@ class _FakeAsyncCopyFile:
 
 
 class _FakeAsyncCopyClient:
-    def __init__(self, *, fail_paths=frozenset(), delay=0):
+    def __init__(self, **requests):
         self.files = {
             "/src/a.txt": b"a",
             "/src/b.txt": b"b",
@@ -419,122 +641,86 @@ class _FakeAsyncCopyClient:
             "/src/d.txt": b"d",
         }
         self.dirs = {"/src": ["a.txt", "b.txt", "c.txt", "d.txt"], "/dst": []}
-        self.fail_paths = set(fail_paths)
-        self.delay = delay
-        self.active = 0
-        self.max_active = 0
-
-    async def _enter(self, path=None):
-        import asyncio
-
-        if path in self.fail_paths:
-            raise asyncssh.SFTPFailure(path)
-        self.active += 1
-        self.max_active = max(self.max_active, self.active)
-        if self.delay:
-            await asyncio.sleep(self.delay)
-
-    async def _exit(self):
-        self.active -= 1
+        self.requests = _Requests(**requests)
 
     async def stat(self, path):
-        await self._enter(path)
-        try:
+        async with self.requests.around("stat", path):
             if path in self.dirs:
                 return _sftp_attrs(True)
             if path in self.files:
                 return _sftp_attrs(False)
             raise asyncssh.SFTPNoSuchFile(path)
-        finally:
-            await self._exit()
 
     async def lstat(self, path):
         return await self.stat(path)
 
     async def readdir(self, path):
-        await self._enter(path)
-        try:
+        async with self.requests.around("readdir", path):
             return [SimpleNamespace(filename=name) for name in self.dirs[path]]
-        finally:
-            await self._exit()
 
     async def mkdir(self, path, attrs):
-        await self._enter(path)
-        try:
+        async with self.requests.around("mkdir", path):
             self.dirs[path] = []
-        finally:
-            await self._exit()
 
     async def remove(self, path):
-        await self._enter(path)
-        try:
+        async with self.requests.around("remove", path):
             self.files.pop(path, None)
-        finally:
-            await self._exit()
 
     async def chmod(self, path, mode):
-        await self._enter(path)
-        await self._exit()
+        async with self.requests.around("chmod", path):
+            pass
 
     async def open(self, path, mode, encoding=None):
-        await self._enter(path)
-        try:
+        async with self.requests.around("open", path):
             if "w" in mode:
                 self.files[path] = b""
             return _FakeAsyncCopyFile(self, path, mode)
-        finally:
-            await self._exit()
 
 
-class _FakeAsyncCopyPath:
-    def __init__(self, client, path):
-        self.path = path
-        self.name = path.rstrip("/").rsplit("/", 1)[-1]
-        self._sftpclient = SimpleNamespace(_aclient=client)
+class _FakeAsyncPath:
+    """The part of a path the walks use: its wire name, its last name and
+    children."""
+
+    def __init__(self, wirepath):
+        self._wirepath = wirepath
+        self.name = wirepath.rstrip("/").rsplit("/", 1)[-1]
 
     def __truediv__(self, name):
-        return type(self)(self._sftpclient._aclient, f"{self.path}/{name}")
-
-    def iterdir(self):
-        return [self / name for name in self._sftpclient._aclient.dirs[self.path]]
+        return type(self)(f"{self._wirepath}/{name}")
 
 
-def test_concurrent_copy_native_respects_max_concurrency():
-    import asyncio
-
-    client = _FakeAsyncCopyClient(delay=0.01)
-    asyncio.run(
-        backend_mod._concurrent_copy(
-            _FakeAsyncCopyPath(client, "/src"),
-            _FakeAsyncCopyPath(client, "/dst"),
-            overwrite=False,
-            follow_symlinks=True,
-            preserve_metadata=True,
-            max_concurrency=3,
-            ignore_error=None,
+def _copy(client, **kwargs):
+    options = dict(
+        overwrite=False,
+        follow_symlinks=True,
+        preserve_metadata=True,
+        max_concurrency=4,
+        ignore_error=None,
+    )
+    options.update(kwargs)
+    return _run_walk(
+        _concurrent_copy(
+            _FakeAsyncPath("/src"), _FakeAsyncPath("/dst"), aclient=client, **options
         )
     )
+
+
+def test_concurrent_copy_native_allows_max_concurrency_and_no_more():
+    client = _FakeAsyncCopyClient(rendezvous=("stat", 3))
+
+    _copy(client, max_concurrency=3)
+
     assert client.files["/dst/a.txt"] == b"a"
     assert client.files["/dst/d.txt"] == b"d"
-    assert 1 < client.max_active <= 3
+    assert client.requests.max_active <= 3
 
 
 def test_concurrent_copy_ignore_error_allows_partial_failure():
-    import asyncio
-
-    client = _FakeAsyncCopyClient(fail_paths={"/src/a.txt", "/src/c.txt"})
+    client = _FakeAsyncCopyClient(fail={("stat", "/src/a.txt"), ("stat", "/src/c.txt")})
     errors = []
-    asyncio.run(
-        backend_mod._concurrent_copy(
-            _FakeAsyncCopyPath(client, "/src"),
-            _FakeAsyncCopyPath(client, "/dst"),
-            overwrite=False,
-            follow_symlinks=True,
-            preserve_metadata=True,
-            max_concurrency=4,
-            ignore_error=errors.append,
-        )
-    )
+
+    _copy(client, ignore_error=errors.append)
+
     assert sorted(path for path in client.files if path.startswith("/dst/")) == [
         "/dst/b.txt",
         "/dst/d.txt",
@@ -544,27 +730,26 @@ def test_concurrent_copy_ignore_error_allows_partial_failure():
 
 
 def test_concurrent_copy_fail_fast_cancels_queued_children():
-    import asyncio
+    # One request at a time: the first child fails, the second is held in
+    # flight and the others are queued behind it. The copy ends with the
+    # failure, so it cannot be waiting for the held request.
+    client = _FakeAsyncCopyClient(
+        fail={("stat", "/src/a.txt")},
+        hang={("stat", f"/src/{name}.txt") for name in "bcd"},
+    )
 
-    client = _FakeAsyncCopyClient(fail_paths={"/src/a.txt"}, delay=0.01)
     with pytest.raises(OSError):
-        asyncio.run(
-            backend_mod._concurrent_copy(
-                _FakeAsyncCopyPath(client, "/src"),
-                _FakeAsyncCopyPath(client, "/dst"),
-                overwrite=False,
-                follow_symlinks=True,
-                preserve_metadata=True,
-                max_concurrency=1,
-                ignore_error=None,
-            )
-        )
-    assert len([path for path in client.files if path.startswith("/dst/")]) < 4
+        _copy(client, max_concurrency=1)
+
+    requests = client.requests
+    assert ("stat", "/src/b.txt") in requests.entered
+    assert requests.active == 0
+    assert ("stat", "/src/c.txt") not in requests.entered
+    assert ("stat", "/src/d.txt") not in requests.entered
+    assert [path for path in client.files if path.startswith("/dst/")] == []
 
 
 def test_sftppath_copy_recursive_uses_concurrent_helper(monkeypatch):
-    import asyncio
-
     recorded = {}
 
     async def _fake_concurrent_copy(path, target, **kwargs):
@@ -580,18 +765,14 @@ def test_sftppath_copy_recursive_uses_concurrent_helper(monkeypatch):
 
     aclient = object()
     monkeypatch.setattr(backend_mod, "_concurrent_copy", _fake_concurrent_copy)
-    monkeypatch.setattr(backend_mod, "_run", _fake_run)
-    monkeypatch.setattr(sftp_pkg.SftpPath, "is_dir", lambda self: True)
+    monkeypatch.setattr(loop_mod, "_run", _fake_run)
+    monkeypatch.setattr(SFTPPath, "is_dir", lambda self: True)
     monkeypatch.setattr(
-        backend_mod.AsyncsshSftpBackend,
-        "client",
-        lambda self, source: SimpleNamespace(_aclient=aclient),
+        AsyncSSHBackend, "client", lambda self: SimpleNamespace(_aclient=aclient)
     )
 
-    src = sftp_pkg.SftpPath(
-        "sftp://host/src", backend=backend_mod.AsyncsshSftpBackend(max_concurrency=5)
-    )
-    target = sftp_pkg.SftpPath("sftp://host/dst", backend=src.backend)
+    src = SFTPPath("/src", backend=AsyncSSHBackend("host", max_concurrency=5))
+    target = SFTPPath("/dst", backend=src.backend)
     monkeypatch.setattr(type(target), "exists", lambda self: False)
     monkeypatch.setattr(
         type(target),
@@ -613,88 +794,43 @@ def test_sftppath_copy_recursive_uses_concurrent_helper(monkeypatch):
 # --- concurrent remove tests ---------------------------------------------
 
 
-def _sftp_attrs(is_dir):
-    permissions = 0o40755 if is_dir else 0o100644
-    file_type = (
-        asyncssh.FILEXFER_TYPE_DIRECTORY if is_dir else asyncssh.FILEXFER_TYPE_REGULAR
-    )
-    return asyncssh.SFTPAttrs(type=file_type, permissions=permissions)
-
-
 class _FakeAsyncRmClient:
-    def __init__(self, tree, *, delay=0, fail_remove=frozenset()):
+    def __init__(self, tree, **requests):
         self.tree = tree
-        self.delay = delay
-        self.fail_remove = set(fail_remove)
-        self.active = 0
-        self.max_active = 0
+        self.requests = _Requests(**requests)
         self.removed = []
         self.rmdirs = []
 
-    async def _enter(self):
-        import asyncio
-
-        self.active += 1
-        self.max_active = max(self.max_active, self.active)
-        if self.delay:
-            await asyncio.sleep(self.delay)
-
-    async def _exit(self):
-        self.active -= 1
-
     async def stat(self, path):
-        await self._enter()
-        try:
+        async with self.requests.around("stat", path):
             if path not in self.tree:
                 raise asyncssh.SFTPNoSuchFile(path)
             return _sftp_attrs(self.tree[path] is not None)
-        finally:
-            await self._exit()
 
     async def lstat(self, path):
         return await self.stat(path)
 
     async def readdir(self, path):
-        await self._enter()
-        try:
+        async with self.requests.around("readdir", path):
             children = self.tree[path] or []
             return [SimpleNamespace(filename=name) for name in children]
-        finally:
-            await self._exit()
 
     async def remove(self, path):
-        await self._enter()
-        try:
-            if path in self.fail_remove:
-                raise asyncssh.SFTPFailure(path)
+        async with self.requests.around("remove", path):
             self.removed.append(path)
-        finally:
-            await self._exit()
 
     async def rmdir(self, path):
-        await self._enter()
-        try:
+        async with self.requests.around("rmdir", path):
             self.rmdirs.append(path)
-        finally:
-            await self._exit()
 
 
-class _FakeAsyncRmPath:
-    name = "root"
-
-    def __init__(self, client, path="/root"):
-        self.path = path
-        self._sftpclient = SimpleNamespace(_aclient=client)
-
-    def __truediv__(self, name):
-        child = _FakeAsyncRmPath(self._sftpclient._aclient, f"{self.path}/{name}")
-        child.name = name
-        return child
+def _rm(client, **kwargs):
+    options = dict(max_concurrency=4, missing_ok=False, on_error=None)
+    options.update(kwargs)
+    return _run_walk(_concurrent_rm(_FakeAsyncPath("/root"), aclient=client, **options))
 
 
-def test_concurrent_rm_uses_native_asyncssh_calls_and_respects_max_concurrency():
-    import asyncio
-
+def test_concurrent_rm_uses_native_asyncssh_calls_and_allows_max_concurrency():
     tree = {
         "/root": ["a.txt", "b.txt", "c.txt", "d.txt"],
         "/root/a.txt": None,
@@ -702,16 +838,9 @@ def test_concurrent_rm_uses_native_asyncssh_calls_and_respects_max_concurrency()
         "/root/c.txt": None,
         "/root/d.txt": None,
     }
-    client = _FakeAsyncRmClient(tree, delay=0.01)
+    client = _FakeAsyncRmClient(tree, rendezvous=("remove", 2))
 
-    asyncio.run(
-        backend_mod._concurrent_rm(
-            _FakeAsyncRmPath(client),
-            max_concurrency=2,
-            missing_ok=False,
-            on_error=None,
-        )
-    )
+    _rm(client, max_concurrency=2)
 
     assert set(client.removed) == {
         "/root/a.txt",
@@ -720,28 +849,22 @@ def test_concurrent_rm_uses_native_asyncssh_calls_and_respects_max_concurrency()
         "/root/d.txt",
     }
     assert client.rmdirs == ["/root"]
-    assert 1 < client.max_active <= 2
+    assert client.requests.max_active <= 2
 
 
 def test_concurrent_rm_ignore_error_receives_error_and_path():
-    import asyncio
-
     tree = {
         "/root": ["ok.txt", "bad.txt"],
         "/root/ok.txt": None,
         "/root/bad.txt": None,
     }
-    client = _FakeAsyncRmClient(tree, fail_remove={"/root/bad.txt"})
+    client = _FakeAsyncRmClient(tree, fail={("remove", "/root/bad.txt")})
     ignored = []
 
-    asyncio.run(
-        backend_mod._concurrent_rm(
-            _FakeAsyncRmPath(client),
-            max_concurrency=4,
-            missing_ok=False,
-            on_error=lambda error, path: ignored.append((type(error), path.path))
-            or True,
-        )
+    _rm(
+        client,
+        on_error=lambda error, path: ignored.append((type(error), path._wirepath))
+        or True,
     )
 
     assert client.removed == ["/root/ok.txt"]
@@ -750,8 +873,9 @@ def test_concurrent_rm_ignore_error_receives_error_and_path():
 
 
 def test_concurrent_rm_fail_fast_cancels_queued_children():
-    import asyncio
-
+    # One request at a time: the first child fails to be removed, the second
+    # is held in flight and the others are queued behind it. The walk ends with
+    # the failure, so it cannot be waiting for the held request.
     tree = {
         "/root": ["bad.txt", "a.txt", "b.txt", "c.txt"],
         "/root/bad.txt": None,
@@ -761,45 +885,30 @@ def test_concurrent_rm_fail_fast_cancels_queued_children():
     }
     client = _FakeAsyncRmClient(
         tree,
-        delay=0.01,
-        fail_remove={"/root/bad.txt"},
+        fail={("remove", "/root/bad.txt")},
+        hang={("remove", f"/root/{name}.txt") for name in "abc"},
     )
 
     with pytest.raises(OSError):
-        asyncio.run(
-            backend_mod._concurrent_rm(
-                _FakeAsyncRmPath(client),
-                max_concurrency=1,
-                missing_ok=False,
-                on_error=None,
-            )
-        )
+        _rm(client, max_concurrency=1)
 
-    assert len(client.removed) < 3
+    assert ("remove", "/root/a.txt") in client.requests.entered
+    assert client.requests.active == 0
+    assert ("stat", "/root/b.txt") not in client.requests.entered
+    assert client.removed == []
     assert client.rmdirs == []
 
 
 def test_concurrent_rm_missing_root_honors_missing_ok():
-    import asyncio
-
     client = _FakeAsyncRmClient({})
 
-    asyncio.run(
-        backend_mod._concurrent_rm(
-            _FakeAsyncRmPath(client),
-            max_concurrency=4,
-            missing_ok=True,
-            on_error=None,
-        )
-    )
+    _rm(client, missing_ok=True)
 
     assert client.removed == []
     assert client.rmdirs == []
 
 
 def test_sftppath_rm_recursive_uses_concurrent_helper(monkeypatch):
-    import asyncio
-
     recorded = {}
 
     async def _fake_concurrent_rm(path, **kwargs):
@@ -814,16 +923,12 @@ def test_sftppath_rm_recursive_uses_concurrent_helper(monkeypatch):
 
     aclient = object()
     monkeypatch.setattr(backend_mod, "_concurrent_rm", _fake_concurrent_rm)
-    monkeypatch.setattr(backend_mod, "_run", _fake_run)
+    monkeypatch.setattr(loop_mod, "_run", _fake_run)
     monkeypatch.setattr(
-        backend_mod.AsyncsshSftpBackend,
-        "client",
-        lambda self, source: SimpleNamespace(_aclient=aclient),
+        AsyncSSHBackend, "client", lambda self: SimpleNamespace(_aclient=aclient)
     )
 
-    src = sftp_pkg.SftpPath(
-        "sftp://host/src", backend=backend_mod.AsyncsshSftpBackend(max_concurrency=6)
-    )
+    src = SFTPPath("/src", backend=AsyncSSHBackend("host", max_concurrency=6))
     src.rm(recursive=True, missing_ok=True, ignore_error=True)
 
     assert recorded["path"] is src
@@ -835,10 +940,8 @@ def test_sftppath_rm_recursive_uses_concurrent_helper(monkeypatch):
 
 
 def _recursive_rm_with(monkeypatch, **policies):
-    """Call `SftpPath.rm(recursive=True, **policies)` on an asyncssh backend
+    """Call `SFTPPath.rm(recursive=True, **policies)` on an asyncssh backend
     whose native walker and generic removal are both recorded."""
-    import asyncio
-
     from pathlib_next import Path
 
     native = []
@@ -852,17 +955,13 @@ def _recursive_rm_with(monkeypatch, **policies):
 
     monkeypatch.setattr(backend_mod, "_concurrent_rm", _fake_concurrent_rm)
     monkeypatch.setattr(
-        backend_mod, "_run", lambda coro, timeout="unset": asyncio.run(coro)
+        loop_mod, "_run", lambda coro, timeout="unset": asyncio.run(coro)
     )
     monkeypatch.setattr(
-        backend_mod.AsyncsshSftpBackend,
-        "client",
-        lambda self, source: SimpleNamespace(_aclient=object()),
+        AsyncSSHBackend, "client", lambda self: SimpleNamespace(_aclient=object())
     )
     monkeypatch.setattr(Path, "rm", _fake_generic_rm)
-    src = sftp_pkg.SftpPath(
-        "sftp://host/src", backend=backend_mod.AsyncsshSftpBackend(max_concurrency=2)
-    )
+    src = SFTPPath("/src", backend=AsyncSSHBackend("host", max_concurrency=2))
     src.rm(recursive=True, **policies)
     return native, generic
 
@@ -897,50 +996,24 @@ def test_sftppath_rm_walks_generically_for_any_other_symlink_policy(
     assert generic[0]["follow_binds"] is None
 
 
-# --- default max_concurrency -------------------------------------------------
-
-
-def test_explicit_max_concurrency_overrides_default():
-    backend = backend_mod.AsyncsshSftpBackend({"config": None}, max_concurrency=4)
-    assert backend.max_concurrency == 4
-    assert (
-        backend_mod.AsyncsshSftpBackend(
-            {"config": None}, max_concurrency=1
-        ).max_concurrency
-        == 1
-    )
-    # 0 is honored as given (the async helpers clamp to >=1 at use time via
-    # `max(1, max_concurrency)`), not silently replaced by the default.
-    assert (
-        backend_mod.AsyncsshSftpBackend(
-            {"config": None}, max_concurrency=0
-        ).max_concurrency
-        == 0
-    )
-
-
 # --- concurrent recursive copy against a real server --------------------------
-# The fakes above hold one flat directory. These run SftpPath.copy's native
-# fan-out (`_concurrent_copy`) over conftest's in-process asyncssh server,
-# whose root is `fixture_tree`, and read the result back from local disk.
+# The fakes above hold one flat directory. These run the native fan-out
+# (`_concurrent_copy`) over conftest's in-process asyncssh server, whose root is
+# `fixture_tree`, for an `SFTPPath` and an `SFTPURIPath`, and read the result
+# back from local disk.
 
 
 @pytest.fixture
-def asyncssh_tree(sftp_server, fixture_tree):
-    from pathlib_next.uri.schemes.sftp import SftpPath
-
-    backend = backend_mod.AsyncsshSftpBackend()
-    root = SftpPath(sftp_server, backend=backend)
-    yield root, fixture_tree
-    backend_mod._CACHE.invalidate((backend, root.source))
+def asyncssh_tree(flavor, sftp_server, fixture_tree, backends):
+    backend = make_backend("asyncssh", sftp_server)
+    backends.append(backend)
+    return make_path(flavor, sftp_server, backend), fixture_tree
 
 
-def _bounded(call, timeout=60):
+def _bounded(call, timeout=_HANG_GUARD):
     """Run `call` on a worker thread: a fan-out deadlock fails the test
-    instead of hanging the run (sync calls made on the asyncssh bridge loop can deadlock).
-    """
-    import threading
-
+    instead of hanging the run (sync calls made on the asyncssh bridge loop can
+    deadlock)."""
     outcome = {}
 
     def run():
@@ -952,7 +1025,7 @@ def _bounded(call, timeout=60):
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
     thread.join(timeout)
-    assert not thread.is_alive(), f"copy did not finish within {timeout}s"
+    assert not thread.is_alive(), f"the call did not return within {timeout}s"
     if "error" in outcome:
         raise outcome["error"]
     return outcome.get("value")
@@ -1017,9 +1090,15 @@ def test_concurrent_copy_type_conflicts_in_existing_tree_real_server(asyncssh_tr
         )
 
 
-def test_concurrent_copy_symlink_child_uses_sync_fallback_real_server(asyncssh_tree):
-    import os
+def _link_target(link, flavor):
+    """The target of `link` as the server stores it."""
+    target = link.readlink()
+    return target._wirepath if flavor == "path" else target.path
 
+
+def test_concurrent_copy_symlink_child_uses_sync_fallback_real_server(
+    asyncssh_tree, flavor
+):
     root, local = asyncssh_tree
     real = local / "sub" / "c.py"
     try:
@@ -1029,7 +1108,7 @@ def test_concurrent_copy_symlink_child_uses_sync_fallback_real_server(asyncssh_t
     except (OSError, NotImplementedError) as error:
         pytest.skip(f"symlink unavailable: {error}")
     try:
-        if (root / "sub" / "link.py").readlink().path != "/sub/c.py":
+        if _link_target(root / "sub" / "link.py", flavor) != "/sub/c.py":
             raise OSError("unexpected link target")
     except OSError as error:
         pytest.skip(f"this server does not serve symlinks: {error}")
@@ -1043,12 +1122,12 @@ def test_concurrent_copy_symlink_child_uses_sync_fallback_real_server(asyncssh_t
     assert copied.is_symlink()
     # The same target, compared as the server reports it: a local readlink
     # on Windows adds an extended-length path prefix.
-    assert (root / "linked_copy" / "link.py").readlink().path == "/sub/c.py"
+    assert _link_target(root / "linked_copy" / "link.py", flavor) == "/sub/c.py"
     assert copied.read_bytes() == b"c"
     assert (local / "linked_copy" / "nested" / "d.py").read_bytes() == b"d"
 
 
-# --- sftp-translate-drops-errno-filename -----------------------------------------
+# --- errno and filename of translated errors -----------------------------------
 
 
 @pytest.mark.parametrize(
@@ -1062,9 +1141,7 @@ def test_concurrent_copy_symlink_child_uses_sync_fallback_real_server(asyncssh_t
     ],
 )
 def test_translate_sets_errno_and_filename(error, expected_type, code):
-    import errno
-
-    result = backend_mod._translate(error, "/srv/a.txt")
+    result = _translate(error, "/srv/a.txt")
     assert type(result) is expected_type
     assert result.errno == getattr(errno, code)
     assert result.filename == "/srv/a.txt"
@@ -1072,15 +1149,15 @@ def test_translate_sets_errno_and_filename(error, expected_type, code):
 
 
 def test_translate_bare_failure_keeps_errno_unset_but_names_the_path():
-    # SFTPv3 has no ENOTEMPTY/EISDIR status: `SftpPath` reads a missing
-    # errno as "consult the entry", exactly as on the paramiko backend.
-    result = backend_mod._translate(asyncssh.SFTPFailure("failure"), "/srv/d")
+    # SFTPv3 has no ENOTEMPTY/EISDIR status: `SFTPPath` reads a missing errno
+    # as "consult the entry", as it does on the paramiko backend.
+    result = _translate(asyncssh.SFTPFailure("failure"), "/srv/d")
     assert type(result) is OSError
     assert result.errno is None
     assert result.filename == "/srv/d"
     assert result.strerror == "failure"
     assert "/srv/d" in str(result)
-    assert backend_mod._translate(asyncssh.SFTPFailure("failure")).errno is None
+    assert _translate(asyncssh.SFTPFailure("failure")).errno is None
 
 
 def test_client_method_errors_name_their_paths():
@@ -1091,9 +1168,7 @@ def test_client_method_errors_name_their_paths():
         async def rename(self, old, new):
             raise asyncssh.SFTPPermissionDenied("denied")
 
-    import errno
-
-    client = backend_mod._SyncSftpClient(_AClient())
+    client = _SyncSFTPClient(_AClient())
     with pytest.raises(FileNotFoundError) as missing:
         client.stat("/srv/missing.txt")
     assert missing.value.errno == errno.ENOENT
@@ -1103,22 +1178,18 @@ def test_client_method_errors_name_their_paths():
     assert (denied.value.filename, denied.value.filename2) == ("/srv/a", "/srv/b")
 
 
-def test_asyncssh_backend_errors_carry_errno_and_filename(sftp_server):
-    import errno
+def test_asyncssh_backend_errors_carry_errno_and_filename(
+    flavor, sftp_server, backends
+):
+    backend = make_backend("asyncssh", sftp_server)
+    backends.append(backend)
+    root = make_path(flavor, sftp_server, backend)
 
-    from pathlib_next.uri.schemes.sftp import SftpPath
-    from pathlib_next.uri.schemes.sftp._asyncssh import AsyncsshSftpBackend
-
-    backend = AsyncsshSftpBackend()
-    root = SftpPath(sftp_server, backend=backend)
-    try:
-        with pytest.raises(FileNotFoundError) as missing:
-            (root / "missing.txt").read_bytes()
-        assert missing.value.errno == errno.ENOENT
-        assert missing.value.filename == (root / "missing.txt").path
-        with pytest.raises(FileExistsError) as exists:
-            (root / "sub").mkdir()
-        assert exists.value.errno == errno.EEXIST
-        assert exists.value.filename == str(root / "sub")
-    finally:
-        backend_mod._CACHE.invalidate((backend, root.source))
+    with pytest.raises(FileNotFoundError) as missing:
+        (root / "missing.txt").read_bytes()
+    assert missing.value.errno == errno.ENOENT
+    assert missing.value.filename == str(root / "missing.txt")
+    with pytest.raises(FileExistsError) as exists:
+        (root / "sub").mkdir()
+    assert exists.value.errno == errno.EEXIST
+    assert exists.value.filename == str(root / "sub")
