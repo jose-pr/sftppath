@@ -1,0 +1,95 @@
+[build-system]
+# PEP 639 `license`/`license-files` below need hatchling 1.27 or newer.
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sftppath"
+version = "0.10.0"
+authors = [{ name = "Jose A" }]
+description = "pathlib-style paths for SFTP servers, on paramiko or asyncssh, and the sftp: scheme for uripath"
+readme = "README.md"
+requires-python = ">=3.9"
+# PEP 639: SPDX license expression plus the file it refers to. This replaces
+# the legacy `License ::` classifier; do not list one alongside it.
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+    # src/sftppath/py.typed ships in the wheel.
+    "Typing :: Typed",
+]
+dependencies = [
+    "pathlib-next>=0.10.0,<0.11",
+]
+
+[project.optional-dependencies]
+# Neither SSH library is required: the first use of a path raises an
+# `ImportError` naming both extras when neither is installed.
+paramiko = ["paramiko>=5.0,<6"]
+asyncssh = [
+    # The connection cache calls SSHClientConnection.is_closed(), absent in
+    # 2.14; the loopback server the tests use answers readlink of an absolute
+    # target only from 2.20. asyncssh 2.22 needs Python 3.10.
+    "asyncssh>=2.20.0,<2.22; python_version<'3.10'",
+    "asyncssh>=2.20.0,<3; python_version>='3.10'",
+]
+# The sftp: scheme of uripath. `import sftppath` never imports uripath.
+uri = ["uripath>=0.10.0,<0.11"]
+all = ["sftppath[paramiko,asyncssh,uri]"]
+dev = [
+    'build',
+    'twine',
+    'hatchling',
+    'pytest',
+    'pytest-cov',
+    'black',
+]
+docs = ['mkdocs', 'mkdocs-material', 'mkdocstrings[python]']
+
+# Declared whether or not uripath is installed: nothing reads the group
+# without it, and the class is imported only when a path of the scheme is built.
+[project.entry-points."uripath.schemes"]
+sftp = "sftppath.uri:SFTPURIPath"
+
+[project.urls]
+Homepage = "https://github.com/jose-pr/sftppath/"
+Documentation = "https://jose-pr.github.io/sftppath/"
+Issues = "https://github.com/jose-pr/sftppath/issues"
+
+# Ship the consumer-facing docs inside the installed package, so they are
+# readable from site-packages via importlib.resources without the repo.
+# src/sftppath/AGENTS.md (the API header) is included automatically by living
+# in the package dir. The repo-root AGENTS.md is contributor orientation for a
+# checkout and is not part of the wheel.
+[tool.hatch.build.targets.wheel.force-include]
+"README.md" = "sftppath/README.md"
+
+# `*.local.*` files are per-machine overrides and `CLAUDE*` is agent config:
+# neither is ever packaged (both are also gitignored). `/.*` does not match
+# them, since their names do not start with a dot.
+[tool.hatch.build.targets.sdist]
+exclude = ["/.*", "/AGENTS.md", "/benchmarks", "*.local.*", "CLAUDE*"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sftppath"]
+exclude = ["*.local.*", "CLAUDE*"]
+
+[tool.black]
+# Pinned to the project's *minimum* supported Python so black never emits
+# syntax the 3.9 floor cannot parse.
+target-version = ["py39"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+filterwarnings = ["error"]
+xfail_strict = true
