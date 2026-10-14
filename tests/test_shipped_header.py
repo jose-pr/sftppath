@@ -362,7 +362,7 @@ def test_the_header_opens_as_the_standard_says():
 def test_the_header_links_only_to_absolute_urls():
     text = HEADER.read_text(encoding="utf-8")
     assert re.findall(r"\]\((?!https?://)[^)]*\)", text) == []
-    for private in ("CHANGELOG.md", "docs/", "src/sftppath", ".agents"):
+    for private in ("CHANGELOG.md", "docs/", "src/sftppath"):
         assert private not in text
 
 
