@@ -17,12 +17,14 @@ import threading
 from types import SimpleNamespace
 
 import pytest
-from child import run
-from sftp_loopback import ANY_PASSWORD
-from sftp_support import make_path
-from waits import wait_until
 
+# Before the helpers: the loopback server module imports asyncssh.
 asyncssh = pytest.importorskip("asyncssh")
+
+from child import run  # noqa: E402
+from sftp_loopback import ANY_PASSWORD  # noqa: E402
+from sftp_support import make_path  # noqa: E402
+from waits import wait_until  # noqa: E402
 
 from pathlib_next import providers  # noqa: E402
 from sftppath import (  # noqa: E402
