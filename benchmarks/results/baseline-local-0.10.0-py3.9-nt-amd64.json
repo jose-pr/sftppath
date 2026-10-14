@@ -1,0 +1,476 @@
+{
+  "schema": "sftppath.bench/1",
+  "name": "baseline-local-0.10.0-py3.9-nt-amd64",
+  "suite": "default",
+  "source": "local",
+  "note": "Local sanity baseline of the default suite; not CI, not a performance claim.",
+  "created_utc": "2026-10-14T05:59:18+00:00",
+  "package": {
+    "name": "sftppath",
+    "version": "0.10.0"
+  },
+  "git": {
+    "commit": "7b1d7e723c3f812d94d6a86aa9e9f49881ac6be2",
+    "dirty": false
+  },
+  "python": "CPython 3.9.13",
+  "interpreter": "3.9-nt-amd64",
+  "processor": "Windows-AMD64",
+  "cpu_count": 12,
+  "env": {
+    "SFTPPATH_BENCH_RECURSIVE": ""
+  },
+  "metrics": {
+    "sftp-uri: asyncssh cold connect + stat()": {
+      "group": "sftp-uri",
+      "min_ms": 9.9304,
+      "median_ms": 10.4637,
+      "max_ms": 12.1893,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: asyncssh copy() single 256 KiB file": {
+      "group": "sftp-uri",
+      "min_ms": 15.3499,
+      "median_ms": 15.6169,
+      "max_ms": 16.8768,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: asyncssh glob('**/*.txt') 80 files": {
+      "group": "sftp-uri",
+      "min_ms": 171.2685,
+      "median_ms": 175.2785,
+      "max_ms": 181.1195,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: asyncssh iterdir() 72 entries": {
+      "group": "sftp-uri",
+      "min_ms": 51.541,
+      "median_ms": 52.0378,
+      "max_ms": 62.4743,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: asyncssh mkdir() leaf dir": {
+      "group": "sftp-uri",
+      "min_ms": 0.8234,
+      "median_ms": 0.8844,
+      "max_ms": 0.9421,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: asyncssh read_bytes() 64-file batch": {
+      "group": "sftp-uri",
+      "min_ms": 181.2863,
+      "median_ms": 183.4662,
+      "max_ms": 192.3663,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: asyncssh read_bytes() small file": {
+      "group": "sftp-uri",
+      "min_ms": 2.8434,
+      "median_ms": 2.9143,
+      "max_ms": 3.9673,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: asyncssh rename() file": {
+      "group": "sftp-uri",
+      "min_ms": 1.1364,
+      "median_ms": 1.3127,
+      "max_ms": 1.5471,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: asyncssh rm(recursive=True) 9-file tree": {
+      "group": "sftp-uri",
+      "min_ms": 33.814,
+      "median_ms": 39.7257,
+      "max_ms": 40.5884,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: asyncssh stat() 64-file batch": {
+      "group": "sftp-uri",
+      "min_ms": 49.8391,
+      "median_ms": 51.6035,
+      "max_ms": 54.195,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: asyncssh unlink() file": {
+      "group": "sftp-uri",
+      "min_ms": 0.8608,
+      "median_ms": 1.02,
+      "max_ms": 1.293,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: asyncssh walk() 80 files": {
+      "group": "sftp-uri",
+      "min_ms": 171.3279,
+      "median_ms": 189.3465,
+      "max_ms": 212.6496,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: asyncssh warm stat()": {
+      "group": "sftp-uri",
+      "min_ms": 0.7807,
+      "median_ms": 0.8039,
+      "max_ms": 0.8989,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: asyncssh write_bytes() 256 KiB": {
+      "group": "sftp-uri",
+      "min_ms": 5.286,
+      "median_ms": 6.0776,
+      "max_ms": 7.6729,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: paramiko cold connect + stat()": {
+      "group": "sftp-uri",
+      "min_ms": 6.6441,
+      "median_ms": 7.0632,
+      "max_ms": 30.1805,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: paramiko copy() single 256 KiB file": {
+      "group": "sftp-uri",
+      "min_ms": 12.3821,
+      "median_ms": 13.0932,
+      "max_ms": 15.2435,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: paramiko glob('**/*.txt') 80 files": {
+      "group": "sftp-uri",
+      "min_ms": 137.4401,
+      "median_ms": 142.1932,
+      "max_ms": 148.8666,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: paramiko iterdir() 72 entries": {
+      "group": "sftp-uri",
+      "min_ms": 52.8706,
+      "median_ms": 60.0651,
+      "max_ms": 62.8282,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: paramiko mkdir() leaf dir": {
+      "group": "sftp-uri",
+      "min_ms": 0.4492,
+      "median_ms": 0.4984,
+      "max_ms": 0.8167,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: paramiko read_bytes() 64-file batch": {
+      "group": "sftp-uri",
+      "min_ms": 81.6264,
+      "median_ms": 83.8467,
+      "max_ms": 86.4114,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: paramiko read_bytes() small file": {
+      "group": "sftp-uri",
+      "min_ms": 1.2585,
+      "median_ms": 1.2944,
+      "max_ms": 2.4162,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: paramiko rename() file": {
+      "group": "sftp-uri",
+      "min_ms": 0.6085,
+      "median_ms": 0.6566,
+      "max_ms": 0.8064,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: paramiko rm(recursive=True) 9-file tree": {
+      "group": "sftp-uri",
+      "min_ms": 23.7564,
+      "median_ms": 25.8285,
+      "max_ms": 29.473,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: paramiko stat() 64-file batch": {
+      "group": "sftp-uri",
+      "min_ms": 23.5974,
+      "median_ms": 28.1169,
+      "max_ms": 32.5029,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: paramiko unlink() file": {
+      "group": "sftp-uri",
+      "min_ms": 0.4686,
+      "median_ms": 0.5014,
+      "max_ms": 0.5574,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: paramiko walk() 80 files": {
+      "group": "sftp-uri",
+      "min_ms": 138.6301,
+      "median_ms": 140.4129,
+      "max_ms": 149.8176,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: paramiko warm stat()": {
+      "group": "sftp-uri",
+      "min_ms": 0.4187,
+      "median_ms": 0.4637,
+      "max_ms": 0.5059,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp-uri: paramiko write_bytes() 256 KiB": {
+      "group": "sftp-uri",
+      "min_ms": 5.3761,
+      "median_ms": 5.7173,
+      "max_ms": 7.478,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: asyncssh cold connect + stat()": {
+      "group": "sftp",
+      "min_ms": 9.2313,
+      "median_ms": 9.6618,
+      "max_ms": 10.9235,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: asyncssh copy() single 256 KiB file": {
+      "group": "sftp",
+      "min_ms": 18.3935,
+      "median_ms": 22.398,
+      "max_ms": 24.5436,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: asyncssh glob('**/*.txt') 80 files": {
+      "group": "sftp",
+      "min_ms": 176.4198,
+      "median_ms": 195.9859,
+      "max_ms": 212.5374,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: asyncssh iterdir() 72 entries": {
+      "group": "sftp",
+      "min_ms": 49.5531,
+      "median_ms": 51.7373,
+      "max_ms": 55.5572,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: asyncssh mkdir() leaf dir": {
+      "group": "sftp",
+      "min_ms": 1.0502,
+      "median_ms": 1.3003,
+      "max_ms": 2.1344,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: asyncssh read_bytes() 64-file batch": {
+      "group": "sftp",
+      "min_ms": 176.8543,
+      "median_ms": 181.6303,
+      "max_ms": 184.2471,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: asyncssh read_bytes() small file": {
+      "group": "sftp",
+      "min_ms": 2.7267,
+      "median_ms": 3.0771,
+      "max_ms": 4.4285,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: asyncssh rename() file": {
+      "group": "sftp",
+      "min_ms": 1.6518,
+      "median_ms": 2.0755,
+      "max_ms": 3.1622,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: asyncssh rm(recursive=True) 9-file tree": {
+      "group": "sftp",
+      "min_ms": 33.8408,
+      "median_ms": 36.1051,
+      "max_ms": 37.2954,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: asyncssh stat() 64-file batch": {
+      "group": "sftp",
+      "min_ms": 47.4465,
+      "median_ms": 48.933,
+      "max_ms": 49.7078,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: asyncssh unlink() file": {
+      "group": "sftp",
+      "min_ms": 0.9399,
+      "median_ms": 1.1041,
+      "max_ms": 1.1834,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: asyncssh walk() 80 files": {
+      "group": "sftp",
+      "min_ms": 170.3348,
+      "median_ms": 182.6331,
+      "max_ms": 194.7007,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: asyncssh warm stat()": {
+      "group": "sftp",
+      "min_ms": 0.748,
+      "median_ms": 1.359,
+      "max_ms": 1.7424,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: asyncssh write_bytes() 256 KiB": {
+      "group": "sftp",
+      "min_ms": 5.8667,
+      "median_ms": 6.4067,
+      "max_ms": 7.9401,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: paramiko cold connect + stat()": {
+      "group": "sftp",
+      "min_ms": 6.2157,
+      "median_ms": 6.6799,
+      "max_ms": 8.157,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: paramiko copy() single 256 KiB file": {
+      "group": "sftp",
+      "min_ms": 15.8411,
+      "median_ms": 16.4934,
+      "max_ms": 20.3733,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: paramiko glob('**/*.txt') 80 files": {
+      "group": "sftp",
+      "min_ms": 133.5058,
+      "median_ms": 138.7186,
+      "max_ms": 146.4371,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: paramiko iterdir() 72 entries": {
+      "group": "sftp",
+      "min_ms": 48.8142,
+      "median_ms": 49.7832,
+      "max_ms": 52.3357,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: paramiko mkdir() leaf dir": {
+      "group": "sftp",
+      "min_ms": 0.5371,
+      "median_ms": 0.8244,
+      "max_ms": 1.3581,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: paramiko read_bytes() 64-file batch": {
+      "group": "sftp",
+      "min_ms": 76.1844,
+      "median_ms": 79.16,
+      "max_ms": 79.8305,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: paramiko read_bytes() small file": {
+      "group": "sftp",
+      "min_ms": 1.1833,
+      "median_ms": 2.1154,
+      "max_ms": 2.2221,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: paramiko rename() file": {
+      "group": "sftp",
+      "min_ms": 0.6965,
+      "median_ms": 0.851,
+      "max_ms": 1.1222,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: paramiko rm(recursive=True) 9-file tree": {
+      "group": "sftp",
+      "min_ms": 28.8641,
+      "median_ms": 29.4412,
+      "max_ms": 37.2023,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: paramiko stat() 64-file batch": {
+      "group": "sftp",
+      "min_ms": 20.405,
+      "median_ms": 21.2599,
+      "max_ms": 25.6933,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: paramiko unlink() file": {
+      "group": "sftp",
+      "min_ms": 0.5237,
+      "median_ms": 0.5347,
+      "max_ms": 0.7192,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: paramiko walk() 80 files": {
+      "group": "sftp",
+      "min_ms": 133.6704,
+      "median_ms": 144.9131,
+      "max_ms": 146.48,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: paramiko warm stat()": {
+      "group": "sftp",
+      "min_ms": 0.3271,
+      "median_ms": 0.3399,
+      "max_ms": 0.4412,
+      "samples": 5,
+      "calls_per_sample": 1
+    },
+    "sftp: paramiko write_bytes() 256 KiB": {
+      "group": "sftp",
+      "min_ms": 5.7908,
+      "median_ms": 7.3002,
+      "max_ms": 8.2664,
+      "samples": 5,
+      "calls_per_sample": 1
+    }
+  },
+  "counters": {},
+  "errors": {},
+  "skipped": {}
+}
