@@ -1,0 +1,58 @@
+site_name: sftppath
+site_description: pathlib-style paths for SFTP servers
+site_url: https://jose-pr.github.io/sftppath/
+repo_url: https://github.com/jose-pr/sftppath
+repo_name: jose-pr/sftppath
+edit_uri: edit/main/docs/
+
+# Constrain the scan to docs/ so pymdownx.snippets + strict nav don't trip on
+# repo-level markdown.
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Guides:
+      - SFTP paths: guides/paths.md
+      - The sftp scheme: guides/uri.md
+  - Benchmarks: benchmarks.md
+  - Divergences from pathlib: divergences.md
+  - API Reference:
+      - SFTP paths: api/sftp.md
+      - The sftp scheme: api/uri.md
+      - Exceptions: api/exceptions.md
+  - Changelog: changelog.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: true
+            show_root_heading: true
+            merge_init_into_class: true
+            show_if_no_docstring: true
+
+markdown_extensions:
+  - admonition
+  - tables
+  - pymdownx.snippets:
+      base_path: ["."]
+  - pymdownx.superfences

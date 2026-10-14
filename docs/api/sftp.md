@@ -1,14 +1,17 @@
-# `sftp:`
+# SFTP paths
 
-Needs the `sftp` extra (paramiko backend) or the `sftp-async` extra (asyncssh
-backend).
-
-::: pathlib_next.uri.schemes.sftp
+::: sftppath
     options:
+      show_if_no_docstring: true
+      filters: ["!^_"]
       members:
-        - BaseSftpBackend
-        - SftpPath
+        - SFTPPath
+        - SFTPEndpoint
+        - BaseSFTPBackend
+        - CheckFileSFTPBackend
+        - DEFAULT_PORT
+        - DEFAULT_SSH_CONFIG
 
-::: pathlib_next.uri.schemes.sftp._paramiko.SftpBackend
+::: sftppath.SFTPBackend
 
-::: pathlib_next.uri.schemes.sftp._asyncssh.AsyncsshSftpBackend
+::: sftppath.AsyncSSHBackend
