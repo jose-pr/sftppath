@@ -282,3 +282,21 @@ mutant(
     ),
     "the handler of rm() receives the path of the core class and not the URI path",
 )
+
+mutant(
+    "sftp-path-needs-an-ssh-library-to-be-built",
+    "_path.py",
+    "            return _MissingBackend(host, port, user, str(error))\n",
+    "            raise\n",
+    "tests/test_isolation.py::test_without_either_ssh_library_names_are_listed_and_a_request_names_both_extras",
+    "a path named with no SSH library installed fails when it is built, not when it is used",
+)
+
+mutant(
+    "sftp-missing-library-of-a-backend-name-is-not-the-extra",
+    "__init__.py",
+    '        if (error.name or "").partition(".")[0] != library:\n',
+    "        if True:\n",
+    "tests/test_isolation.py::test_without_either_ssh_library_names_are_listed_and_a_request_names_both_extras",
+    "naming a backend whose library is missing raises ModuleNotFoundError, not the ImportError that names the extra",
+)

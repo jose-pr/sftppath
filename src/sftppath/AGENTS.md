@@ -11,10 +11,12 @@ Names are imported from `sftppath` (the path and the backends), from
 `sftppath.uri` (the `sftp:` scheme of `uripath`); a module whose name starts
 with an underscore is private. `import sftppath` imports neither SSH library
 nor `uripath`: `SFTPBackend` and `AsyncSSHBackend` are loaded the first time
-they are named.
+they are named, and naming one whose library is not installed raises an
+`ImportError` naming its extra.
 
 `pip install "sftppath[paramiko]"` or `"sftppath[asyncssh]"` installs an SSH
-library; with neither, the first path built from endpoint keywords raises an
+library; with neither, a path can still be built, named, joined and compared
+(its endpoint keywords are not checked), and its first request raises an
 `ImportError` naming both extras. `[uri]` adds `uripath` and with it the `sftp:`
 scheme, `[all]` is the three together. The one required dependency is
 `pathlib-next>=0.10.0,<0.11`. The root's `__version__` is the version of the
@@ -71,8 +73,8 @@ request does.
   joining and comparing such a path still work.
 - **Backend selection**, highest first: `backend=` → the class attribute
   `_default_backend_cls` of a subclass → the environment variable
-  `SFTPPATH_BACKEND` (`auto`|`asyncssh`|`paramiko`; a named backend that is not
-  installed raises `ImportError`) → auto (asyncssh if importable, else
+  `SFTPPATH_BACKEND` (`auto`|`asyncssh`|`paramiko`; the first request of a path
+  whose named backend is not installed raises `ImportError`) → auto (asyncssh if importable, else
   paramiko). The choice is made once per process.
 - **Names.** The tree has no working directory: `srv/x` and `/srv/x` name one
   file, read from the server root, and `/` is sent for the root (never an empty
@@ -391,8 +393,8 @@ or asyncssh crosses the API. A bad argument is a plain `ValueError` or
 `auto` (the default), `asyncssh` or `paramiko`: the backend class a path builds
 when it is given endpoint keywords and no `backend=`. Any other value, an empty
 one and a differently cased one included, is a `ValueError` naming the
-variable; a named backend whose library is not installed is an `ImportError`
-naming its extra. It is read the first time a backend is needed and kept for
+variable; for a named backend whose library is not installed, the first
+request of a path raises an `ImportError` naming its extra. It is read the first time a backend is needed and kept for
 the life of the process.
 
 ## Gotchas

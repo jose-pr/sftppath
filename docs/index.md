@@ -19,10 +19,10 @@ pip install "sftppath[paramiko]"      # or "sftppath[asyncssh]", or both
 pip install "sftppath[uri]"           # adds uripath and with it the sftp: scheme
 ```
 
-Neither SSH library is required to import the package; the first path built from
-a host name raises an `ImportError` that names both extras when neither is
-installed. With both installed, asyncssh is used, and it also runs recursive
-`copy()` and `rm()` as concurrent requests.
+Neither SSH library is required to import the package or to build, join and
+compare paths; the first request of a path raises an `ImportError` that names
+both extras when neither is installed. With both installed, asyncssh is used,
+and it also runs recursive `copy()` and `rm()` as concurrent requests.
 
 | Install | Adds |
 | --- | --- |

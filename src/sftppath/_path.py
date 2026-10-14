@@ -25,7 +25,7 @@ from ._rename import (
     _mark_posix_rename_unsupported,
     _posix_rename_known_unsupported,
 )
-from ._select import _resolve_default_backend_cls
+from ._select import _MissingBackend, _resolve_default_backend_cls
 from ._sshconfig import DEFAULT_SSH_CONFIG, UNSET
 from .exceptions import SFTPAuthenticationError
 
@@ -36,7 +36,8 @@ def _rebuild_path(cls, text, backend):
 
 class SFTPPath(TreePath):
     """A path on an SFTP server, over paramiko or asyncssh (see "backend
-    selection" in `_select`). Needs the `paramiko` or the `asyncssh` extra.
+    selection" in `_select`). A request needs the `paramiko` or the `asyncssh`
+    extra; naming, joining and comparing paths needs neither.
     Also implements `pathlib_next.protocols.checksum.NativeChecksum`
     (`checksum()`, delegating to `self.backend.checksum()`) -- native on both
     backends via the filexfer draft's `check-file-handle` extension where the
@@ -123,7 +124,11 @@ class SFTPPath(TreePath):
     ) -> BaseSFTPBackend:
         """The backend of the class `_default_backend_cls` or `SFTPPATH_BACKEND`
         selects, for these keywords."""
-        backend_cls = cls._default_backend_cls or _resolve_default_backend_cls()
+        try:
+            backend_cls = cls._default_backend_cls or _resolve_default_backend_cls()
+        except ImportError as error:
+            # The library is needed when a request is made, not to name a file.
+            return _MissingBackend(host, port, user, str(error))
         extra = dict(options)
         if timeout is not UNSET:
             extra["timeout"] = timeout

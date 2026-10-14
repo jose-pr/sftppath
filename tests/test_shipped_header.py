@@ -20,6 +20,7 @@ import sys
 import pytest
 
 import sftppath
+from capabilities import installed, library_missing
 
 HEADER = pathlib.Path(sftppath.__file__).resolve().parent / "AGENTS.md"
 MODULE = re.compile(r"`(sftppath[\w.]*)`")
@@ -212,6 +213,8 @@ def check_block(modules, source):
         return problems  # an example that imports; another test runs it
     for node in tree.body:
         if isinstance(node, ast.ClassDef):
+            if library_missing(node.name):
+                continue  # compared where its library is installed
             problems += check_class(modules, node)
         elif isinstance(node, ast.FunctionDef):
             problems += signature_problems(
@@ -269,9 +272,24 @@ def _cases():
         )
 
 
+def _left_out(source):
+    """The classes of a block that `check_block` cannot compare here."""
+    return [
+        node.name
+        for node in ast.parse(source).body
+        if isinstance(node, ast.ClassDef) and library_missing(node.name)
+    ]
+
+
 @pytest.mark.parametrize(("modules", "source"), list(_cases()))
 def test_the_stubs_of_each_block_match_the_code(modules, source):
     assert check_block(modules, source) == []
+    left_out = _left_out(source)
+    if left_out:
+        pytest.skip(
+            f"the rest of the block matches; {', '.join(left_out)}: "
+            "its SSH library is not installed"
+        )
 
 
 def test_the_header_has_blocks_for_the_package():
@@ -300,10 +318,13 @@ def test_the_header_has_blocks_for_the_package():
             "def chmod(self, mode, follow_symlinks=True) -> None: ...",
             "chmod",
         ),
-        (
+        pytest.param(
             "class SFTPBackend(CheckFileSFTPBackend):",
             "class SFTPBackend(Elsewhere):",
             "Elsewhere is not a base",
+            marks=pytest.mark.skipif(
+                not installed("paramiko"), reason="paramiko is not installed"
+            ),
         ),
         (
             "def tree_rm(self, path, *, missing_ok, on_error) -> None: ...",

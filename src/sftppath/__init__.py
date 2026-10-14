@@ -3,7 +3,8 @@
 `SFTPPath` needs no URI and imports neither SSH library until a backend is
 built: `SFTPBackend` (paramiko) and `AsyncSSHBackend` (asyncssh) are resolved
 on first use (PEP 562), so `import sftppath` needs neither extra and never
-imports `uripath`. The `sftp:` scheme of `uripath` is `sftppath.uri`.
+imports `uripath`; naming one whose library is missing raises an `ImportError`
+that names the extra. The `sftp:` scheme of `uripath` is `sftppath.uri`.
 """
 
 from __future__ import annotations
@@ -37,18 +38,30 @@ __all__ = [
     "__version__",
 ]
 
-#: Public name -> the private module that defines it, imported on first use.
+#: Public name -> (the private module that defines it, imported on first use;
+#: the library and extra it needs).
 _LAZY = {
-    "AsyncSSHBackend": "._asyncssh",
-    "SFTPBackend": "._paramiko",
+    "AsyncSSHBackend": ("._asyncssh", "asyncssh"),
+    "SFTPBackend": ("._paramiko", "paramiko"),
 }
 
 
 def __getattr__(name: str):
-    module = _LAZY.get(name)
-    if module is None:
+    entry = _LAZY.get(name)
+    if entry is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(_importlib.import_module(module, __name__), name)
+    module, library = entry
+    try:
+        loaded = _importlib.import_module(module, __name__)
+    except ModuleNotFoundError as error:
+        if (error.name or "").partition(".")[0] != library:
+            raise
+        raise ImportError(
+            f"{name} needs the {library!r} extra: "
+            f'pip install "sftppath[{library}]"',
+            name=library,
+        ) from error
+    value = getattr(loaded, name)
     globals()[name] = value
     return value
 

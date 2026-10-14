@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Neither SSH library is required: the first use of a path raises an
+# Neither SSH library is required: the first request of a path raises an
 # `ImportError` naming both extras when neither is installed.
 paramiko = ["paramiko>=5.0,<6"]
 asyncssh = [

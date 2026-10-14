@@ -15,6 +15,7 @@ import sys
 import pytest
 
 import sftppath
+from capabilities import exported
 
 PACKAGE = pathlib.Path(sftppath.__file__).resolve().parent
 HEADER = PACKAGE / "AGENTS.md"
@@ -55,7 +56,7 @@ def _documented():
 def test_documented_names_stay_importable_from_where_they_are_documented(module):
     imported = importlib.import_module(module)
     missing = sorted(
-        name for name in _documented()[module] if not hasattr(imported, name)
+        name for name in _documented()[module] if not exported(imported, name)
     )
     assert missing == []
 
@@ -70,7 +71,7 @@ def test_a_public_module_exports_exactly_the_documented_names(module):
 def test_the_lazily_loaded_names_are_exported():
     assert set(sftppath._LAZY) <= set(sftppath.__all__)
     for name in sftppath.__all__:
-        assert hasattr(sftppath, name), name
+        assert exported(sftppath, name), name
 
 
 def test_every_public_module_declares_all_and_the_others_are_private():
@@ -85,7 +86,7 @@ def test_every_public_module_declares_all_and_the_others_are_private():
     for name in ["sftppath", *_documented()]:
         module = importlib.import_module(name)
         assert isinstance(module.__all__, (list, tuple)), name
-        assert all(hasattr(module, member) for member in module.__all__), name
+        assert all(exported(module, member) for member in module.__all__), name
 
 
 def _header_import_lines():

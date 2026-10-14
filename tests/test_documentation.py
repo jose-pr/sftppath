@@ -13,6 +13,7 @@ import types
 import pytest
 
 import sftppath
+from capabilities import exported, library_missing
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 HEADER = pathlib.Path(sftppath.__file__).resolve().parent / "AGENTS.md"
@@ -39,6 +40,11 @@ def _directives():
     return found
 
 
+#: What a backend resolves to when its library is not installed: offered by the
+#: package, and not loadable here.
+NOT_INSTALLED = object()
+
+
 def _resolve(dotted):
     parts = dotted.split(".")
     for cut in range(len(parts), 0, -1):
@@ -47,6 +53,10 @@ def _resolve(dotted):
         except ImportError:
             continue
         for part in parts[cut:]:
+            if not exported(found, part):
+                raise AttributeError(dotted)
+            if library_missing(part):
+                return NOT_INSTALLED
             found = getattr(found, part)
         return found
     raise ImportError(dotted)

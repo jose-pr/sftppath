@@ -48,15 +48,39 @@ def test_building_and_deriving_a_path_with_a_given_backend_needs_no_ssh_library(
     assert result.stdout.strip() == "ok"
 
 
-def test_without_either_ssh_library_the_endpoint_keywords_name_both_extras():
+def test_without_either_ssh_library_names_are_listed_and_a_request_names_both_extras():
     result = run(
         """
+        import pickle
+        import sftppath
         from sftppath import SFTPPath
 
+        backends = {"SFTPBackend": "paramiko", "AsyncSSHBackend": "asyncssh"}
+        for name in sftppath.__all__:
+            assert name in dir(sftppath), name
+            if name not in backends:
+                assert getattr(sftppath, name) is not None, name
+        for name, library in backends.items():
+            try:
+                getattr(sftppath, name)
+            except ImportError as error:
+                assert f'pip install "sftppath[{library}]"' in str(error), error
+            else:
+                raise AssertionError(f"{name} loaded without {library}")
+
+        path = SFTPPath("/srv/x", host="Host", port=2222, user="u")
+        assert path.name == "x"
+        assert (path / "y").parent == path
+        assert path == SFTPPath("/srv/x", host="host", port=2222, user="u")
+        assert path.as_uri() == "sftp://u@Host:2222/srv/x"
+        assert pickle.loads(pickle.dumps(path)) == path
+
         try:
-            SFTPPath("/x", host="h")
+            path.stat()
         except ImportError as error:
             print(error)
+        else:
+            raise AssertionError("a request was made with no SSH library")
         """,
         SSH_LIBRARIES,
     )
@@ -65,7 +89,7 @@ def test_without_either_ssh_library_the_endpoint_keywords_name_both_extras():
     assert "sftppath[paramiko]" in result.stdout
 
 
-def test_a_named_backend_that_is_not_installed_names_its_extra():
+def test_a_named_backend_that_is_not_installed_names_its_extra_when_a_request_is_made():
     for library in SSH_LIBRARIES:
         result = run(
             f"""
@@ -73,8 +97,9 @@ def test_a_named_backend_that_is_not_installed_names_its_extra():
             os.environ["SFTPPATH_BACKEND"] = {library!r}
             from sftppath import SFTPPath
 
+            path = SFTPPath("/x", host="h")
             try:
-                SFTPPath("/x", host="h")
+                path.stat()
             except ImportError as error:
                 print(error)
             """,

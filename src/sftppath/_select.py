@@ -2,14 +2,15 @@
 
 Highest first: `backend=` > the `_default_backend_cls` of the path class >
 `SFTPPATH_BACKEND` > auto-detect (asyncssh, else paramiko). Both libraries are
-probed lazily: importing the package needs neither SSH library.
+probed lazily: importing the package needs neither SSH library, and a path named
+without one fails when it makes its first request (`_MissingBackend`).
 """
 
 from __future__ import annotations
 
 import os as _os
 
-from ._backend import BaseSFTPBackend
+from ._backend import BaseSFTPBackend, SFTPEndpoint
 
 _ENV_VAR = "SFTPPATH_BACKEND"
 _BACKEND_REGISTRY: "dict[str, type[BaseSFTPBackend]]" = {}
@@ -91,3 +92,37 @@ def _resolve_default_backend_cls(reload: bool = False) -> "type[BaseSFTPBackend]
         )
     _resolved_backend_cls = cls
     return cls
+
+
+class _MissingBackend(BaseSFTPBackend):
+    """The backend of a path named while no SSH library it can use is
+    installed. It keeps the endpoint, so the path can still be named, joined and
+    compared; `client()` raises the `ImportError` that names the extras."""
+
+    __slots__ = ("host", "port", "user", "_message")
+
+    def __init__(self, host, port, user, message: str) -> None:
+        if not host:
+            raise ValueError("an SFTP backend needs a host")
+        self.host = str(host)
+        self.port = None if port is None else int(port)
+        self.user = user
+        self._message = message
+
+    @property
+    def endpoint(self) -> SFTPEndpoint:
+        return SFTPEndpoint(self.host.lower(), self.port, self.user)
+
+    def client(self):
+        raise ImportError(self._message)
+
+    def __repr__(self) -> str:
+        shown = [repr(self.host)]
+        if self.port is not None:
+            shown.append(str(self.port))
+        if self.user is not None:
+            shown.append(f"user={self.user!r}")
+        return f"{type(self).__name__}({', '.join(shown)})"
+
+    def __reduce__(self):
+        return type(self), (self.host, self.port, self.user, self._message)
