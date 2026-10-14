@@ -20,7 +20,7 @@ import pytest
 
 pytest.importorskip("uripath")
 
-from pathlib_next import FileStat
+from pathapi import FileStat
 from uripath import URIPath
 
 import sftppath

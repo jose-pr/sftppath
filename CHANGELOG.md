@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 The first release of `sftppath`: the SFTP support of `pathlib-next` 0.9.14
 (`pathlib_next.uri.schemes.sftp`) as a distribution of its own, with a path that
-needs no URI. It needs Python 3.9 or newer and `pathlib-next>=0.10.0,<0.11`.
+needs no URI. It needs Python 3.9 or newer and `pathapi>=0.1.0,<0.2`.
 Neither SSH library is required to import it: the extras `paramiko`
 (`paramiko>=5.0,<6`) and `asyncssh` (`asyncssh>=2.20.0`, below 3) add one, and
 `uri` (`uripath>=0.1.0,<0.2`) adds the `sftp:` scheme. With neither SSH library a
@@ -22,9 +22,12 @@ migration from `pathlib_next.uri.schemes.sftp` comes in this order: the table of
 names, the table of extras, then every change of behaviour with what to do about
 it.
 
+It is built on `pathapi`, which was published as `pathlib-next` up to 0.10.0 (import
+name `pathlib_next`); the old names below are the ones before the move.
+
 ### Added
 
-- `SFTPPath`, a `pathlib_next.Path` for a directory tree on an SFTP server, built
+- `SFTPPath`, a `pathapi.Path` for a directory tree on an SFTP server, built
   from keywords: `SFTPPath("/srv/x", host="h", port=2222, user="u", password="p")`.
   Nothing connects until the first request. `backend=` shares one connection
   between paths built separately; a path joined from another keeps its backend.
@@ -33,7 +36,7 @@ it.
   backend is a context manager, `close()` returns when the connections are
   closed, and may be called twice. `SFTPEndpoint`, `DEFAULT_PORT` and
   `DEFAULT_SSH_CONFIG` are exported too.
-- `sftppath.exceptions`: `SFTPPathError`, a `pathlib_next.PathError`, with
+- `sftppath.exceptions`: `SFTPPathError`, a `pathapi.PathError`, with
   `SFTPAuthenticationError` (also `PermissionError`) and `SFTPHostKeyError`
   (also `ConnectionError`).
 - `sftppath.uri`: `SFTPURIPath`, the `sftp:` scheme of `uripath`, found by

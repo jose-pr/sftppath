@@ -9,7 +9,7 @@
 **`pathlib` for SFTP servers.** `SFTPPath("/srv/data/report.txt", host="files.example.org")`
 has the method names, signatures and exception types of `pathlib.Path`, over
 paramiko or asyncssh, and needs no URI. It builds on
-[`pathlib-next`](https://github.com/jose-pr/pathlib-next) alone; with
+[`pathapi`](https://github.com/jose-pr/pathapi) alone; with
 [`uripath`](https://github.com/jose-pr/uripath) installed it also provides the
 `sftp:` scheme. It is documented at <https://jose-pr.github.io/sftppath/>.
 
@@ -18,7 +18,7 @@ paramiko or asyncssh, and needs no URI. It builds on
 - **A `pathlib` path on a server**: `open`, `read_text`, `iterdir`, `glob`,
   `stat`, `mkdir`, `rename`, `replace`, `chmod`, `symlink_to`, `readlink` and
   the rest, plus `walk`, `copy`, `move`, `rm` and `PathSyncer` from
-  `pathlib-next`. Nothing connects until the first request.
+  `pathapi`. Nothing connects until the first request.
 - **Two backends, one behaviour**: `SFTPBackend` (paramiko) and `AsyncSSHBackend`
   (asyncssh) raise the same exceptions for the same server answers; the choice is
   a keyword, a subclass attribute or `SFTPPATH_BACKEND`.
@@ -41,7 +41,7 @@ paramiko or asyncssh, and needs no URI. It builds on
 pip install "sftppath[paramiko]"
 ```
 
-Requires `pathlib-next`, which pip installs with it, and Python 3.9 or newer.
+Requires `pathapi`, which pip installs with it, and Python 3.9 or newer.
 
 | Install | Adds |
 | --- | --- |
@@ -84,8 +84,8 @@ with SFTPBackend("files.example.org", user="deploy", timeout=10) as backend:
 
 <!-- example: skip: connects to a server -->
 ```python
-from pathlib_next import LocalPath
-from pathlib_next.sync import PathSyncer
+from pathapi import LocalPath
+from pathapi.sync import PathSyncer
 from sftppath import SFTPPath
 
 remote = SFTPPath("/var/log", host="files.example.org", user="deploy")

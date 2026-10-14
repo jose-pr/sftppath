@@ -6,7 +6,7 @@ from __future__ import annotations
 import pathlib as _pathlib
 
 import paramiko as _paramiko
-from pathlib_next import providers as _providers
+from pathapi import providers as _providers
 
 from ._sshconfig import _expand_includes, _normalize_config_paths
 

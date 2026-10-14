@@ -19,7 +19,7 @@ library; with neither, a path can still be built, named, joined and compared
 (its endpoint keywords are not checked), and its first request raises an
 `ImportError` naming both extras. `[uri]` adds `uripath` and with it the `sftp:`
 scheme, `[all]` is the three together. The one required dependency is
-`pathlib-next>=0.10.0,<0.11`. The root's `__version__` is the version of the
+`pathapi>=0.1.0,<0.2`. The root's `__version__` is the version of the
 installed distribution.
 
 ## SFTP paths (`sftppath`)
@@ -44,7 +44,7 @@ class SFTPPath(Path):
     def supported_checksums(self) -> FrozenSet[str]: ...
 ```
 
-A `pathlib_next.Path` for a directory tree on an SFTP server, over paramiko or
+A `pathapi.Path` for a directory tree on an SFTP server, over paramiko or
 asyncssh. It needs no URI. Nothing connects when a path is built; the first
 request does.
 
@@ -171,7 +171,7 @@ request does.
   and tree, and `rm(recursive=True)` with the default `follow_symlinks=False`,
   run them as concurrent native requests bounded by `max_concurrency`;
   otherwise (and for every backend that does not set it) the generic walks of
-  `pathlib_next` run, and no SSH library is imported by `copy()` or `rm()`.
+  `pathapi` run, and no SSH library is imported by `copy()` or `rm()`.
   `progress` is not called during the native fan-out, and the native `rm()`
   looks only at the root before it lists.
 
@@ -377,7 +377,7 @@ class SFTPHostKeyError(SFTPPathError, ConnectionError): ...
 ```
 
 `SFTPPathError` is the base of what this package raises on its own, itself a
-`pathlib_next.PathError`; the root exports the three. Every failure of the
+`pathapi.PathError`; the root exports the three. Every failure of the
 server is the `OSError` type pathlib raises for it, and no exception of paramiko
 or asyncssh crosses the API. A bad argument is a plain `ValueError` or
 `TypeError`.

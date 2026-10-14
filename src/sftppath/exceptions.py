@@ -9,7 +9,7 @@ across the API. A bad argument is a plain `ValueError` or `TypeError`.
 
 from __future__ import annotations
 
-from pathlib_next import PathError
+from pathapi import PathError
 
 __all__ = ["SFTPAuthenticationError", "SFTPHostKeyError", "SFTPPathError"]
 

@@ -22,8 +22,8 @@ pytest.importorskip("paramiko")
 import paramiko
 import paramiko.message
 import paramiko.sftp as paramiko_sftp
-from pathlib_next import FileStat
-from pathlib_next.sync import PathSyncer, SyncEvent
+from pathapi import FileStat
+from pathapi.sync import PathSyncer, SyncEvent
 from sftp_support import make_backend
 
 import sftppath
@@ -1167,7 +1167,7 @@ def test_recursive_copy_of_a_directory_within_one_server_is_the_backends_walk(
 def test_recursive_copy_to_another_class_or_server_is_not_the_backends_walk(
     monkeypatch,
 ):
-    from pathlib_next import LocalPath, Path
+    from pathapi import LocalPath, Path
 
     copied = []
     monkeypatch.setattr(Path, "copy", lambda self, target, **kw: copied.append(target))

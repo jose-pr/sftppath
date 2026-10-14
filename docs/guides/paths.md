@@ -1,9 +1,9 @@
 # SFTP paths
 
-`SFTPPath` is a `pathlib_next.Path` for a directory tree on an SFTP server. It
+`SFTPPath` is a `pathapi.Path` for a directory tree on an SFTP server. It
 supports what `pathlib.Path` does on a file system (`open`, `read_text`,
 `write_bytes`, `iterdir`, `glob`, `stat`, `mkdir`, `unlink`, `rmdir`, `rename`,
-`replace`, `chmod`, `symlink_to`, `readlink`, ...) and what `pathlib-next` adds
+`replace`, `chmod`, `symlink_to`, `readlink`, ...) and what `pathapi` adds
 (`walk`, `copy`, `move`, `rm`, `PathSyncer`).
 
 ## Naming the server

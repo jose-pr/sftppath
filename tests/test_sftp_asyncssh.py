@@ -150,7 +150,7 @@ def test_stat_adapter_filename_from_readdir_entry():
 
 
 def test_filestat_from_stat_adapter_roundtrip():
-    from pathlib_next import FileStat
+    from pathapi import FileStat
 
     attrs = _attrs(type=asyncssh.FILEXFER_TYPE_DIRECTORY, permissions=0o40755, size=0)
     adapted = _StatAdapter(attrs)
@@ -289,15 +289,15 @@ def _tree_of(module):
 
 def _child(*args, **env_overrides):
     """Run `python -c <args[0]> <args[1:]>` in a fresh interpreter that imports
-    the same `sftppath` (and `pathlib_next`) this test runs against and has the
+    the same `sftppath` (and `pathapi`) this test runs against and has the
     PYTHONPATH of this process after them; `SFTPPATH_BACKEND` is unset unless
     `env_overrides` gives it."""
-    import pathlib_next
+    import pathapi
 
     env = dict(os.environ)
     env.pop(_select._ENV_VAR, None)
     env.update(env_overrides)
-    trees = [_tree_of(sftppath), _tree_of(pathlib_next)]
+    trees = [_tree_of(sftppath), _tree_of(pathapi)]
     if importlib.util.find_spec("uripath") is not None:
         import uripath
 
@@ -942,7 +942,7 @@ def test_sftppath_rm_recursive_uses_concurrent_helper(monkeypatch):
 def _recursive_rm_with(monkeypatch, **policies):
     """Call `SFTPPath.rm(recursive=True, **policies)` on an asyncssh backend
     whose native walker and generic removal are both recorded."""
-    from pathlib_next import Path
+    from pathapi import Path
 
     native = []
     generic = []

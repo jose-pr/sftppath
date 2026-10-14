@@ -439,7 +439,7 @@ def test_an_unset_variable_is_auto(select, monkeypatch):
 
 def test_the_old_variable_of_the_core_is_not_read(select, monkeypatch):
     monkeypatch.delenv(select._ENV_VAR, raising=False)
-    monkeypatch.setenv("PATHLIB_NEXT_SFTP_BACKEND", "other")
+    monkeypatch.setenv("PATHAPI_SFTP_BACKEND", "other")
     try:
         select._resolve_default_backend_cls()
     except ImportError:

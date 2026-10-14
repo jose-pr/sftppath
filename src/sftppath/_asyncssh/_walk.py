@@ -8,8 +8,8 @@ import functools as _functools
 import stat as _stat
 
 import asyncssh as _asyncssh
-from pathlib_next import FileStat
-from pathlib_next import providers as _providers
+from pathapi import FileStat
+from pathapi import providers as _providers
 
 from ._attrs import _StatAdapter
 from ._client import _aopen
@@ -141,7 +141,7 @@ async def _concurrent_copy(
     raises: a copy that has raised has stopped, and a destination file whose
     copy did not complete is removed. A source is opened before the
     destination it replaces is touched, and modes are applied as
-    `Path.copy()` applies them (see `_copy_mode` in `pathlib_next`'s `Path`).
+    `Path.copy()` applies them (see `_copy_mode` in `pathapi`'s `Path`).
     """
     semaphore = _asyncio.Semaphore(max(1, max_concurrency))
     # Separate from `semaphore`, which every request in copy_file takes: holding one

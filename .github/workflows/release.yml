@@ -18,27 +18,27 @@ permissions:
   contents: read
 
 env:
-  # A git ref of jose-pr/pathlib-next and one of jose-pr/uripath to install first
-  # (the repository variables PATHLIB_NEXT_REF and URIPATH_REF), for a
+  # A git ref of jose-pr/pathapi and one of jose-pr/uripath to install first
+  # (the repository variables PATHAPI_REF and URIPATH_REF), for a
   # pre-release made while the versions that pyproject.toml asks for are not on
   # PyPI yet. Empty installs them from PyPI. A final tag refuses a ref: what is
   # released is what users install.
-  CORE_REF: ${{ vars.PATHLIB_NEXT_REF }}
+  CORE_REF: ${{ vars.PATHAPI_REF }}
   URIPATH_REF: ${{ vars.URIPATH_REF }}
 
 jobs:
   released-dependencies:
-    name: Source of pathlib-next and uripath
+    name: Source of pathapi and uripath
     runs-on: ubuntu-latest
     steps:
       - name: Say where they come from
         run: |
-          echo "pathlib-next from ${CORE_REF:-PyPI}"
+          echo "pathapi from ${CORE_REF:-PyPI}"
           echo "uripath from ${URIPATH_REF:-PyPI}"
       - name: Refuse a git ref on a final tag
         if: ${{ (env.CORE_REF != '' || env.URIPATH_REF != '') && !contains(github.ref_name, '-') }}
         run: |
-          echo "PATHLIB_NEXT_REF or URIPATH_REF is set: a final release is tested against the releases on PyPI. Release them first and delete the repository variables." >&2
+          echo "PATHAPI_REF or URIPATH_REF is set: a final release is tested against the releases on PyPI. Release them first and delete the repository variables." >&2
           exit 1
 
   test:
@@ -54,11 +54,11 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install pathlib-next and uripath from their git refs, if set
+      - name: Install pathapi and uripath from their git refs, if set
         if: ${{ env.CORE_REF != '' || env.URIPATH_REF != '' }}
         shell: bash
         run: |
-          if [ -n "$CORE_REF" ]; then python -m pip install "pathlib-next @ git+https://github.com/jose-pr/pathlib-next@${CORE_REF}"; fi
+          if [ -n "$CORE_REF" ]; then python -m pip install "pathapi @ git+https://github.com/jose-pr/pathapi@${CORE_REF}"; fi
           if [ -n "$URIPATH_REF" ]; then python -m pip install "uripath @ git+https://github.com/jose-pr/uripath@${URIPATH_REF}"; fi
       - name: Install the package with both SSH libraries, uripath and its test tools
         run: python -m pip install -e ".[dev,all]"
@@ -79,10 +79,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install pathlib-next from the git ref, if one is set
+      - name: Install pathapi from the git ref, if one is set
         if: ${{ env.CORE_REF != '' }}
         shell: bash
-        run: python -m pip install "pathlib-next @ git+https://github.com/jose-pr/pathlib-next@${CORE_REF}"
+        run: python -m pip install "pathapi @ git+https://github.com/jose-pr/pathapi@${CORE_REF}"
       - name: Install the package with both SSH libraries and no uripath
         run: python -m pip install -e ".[dev,paramiko,asyncssh]"
       - name: Run tests
@@ -120,12 +120,12 @@ jobs:
                   pins.append("%s==%s" % (m.group(1), m.group(3)))
           open("floors.txt", "w").write("\n".join(pins) + "\n")
           print("\n".join(pins) or "(no floors declared)")
-      - name: Install pathlib-next and uripath from their git refs, if set
+      - name: Install pathapi and uripath from their git refs, if set
         if: ${{ env.CORE_REF != '' || env.URIPATH_REF != '' }}
         # Without a ref the release is installed at its floor, below.
         shell: bash
         run: |
-          if [ -n "$CORE_REF" ]; then python -m pip install "pathlib-next @ git+https://github.com/jose-pr/pathlib-next@${CORE_REF}"; fi
+          if [ -n "$CORE_REF" ]; then python -m pip install "pathapi @ git+https://github.com/jose-pr/pathapi@${CORE_REF}"; fi
           if [ -n "$URIPATH_REF" ]; then python -m pip install "uripath @ git+https://github.com/jose-pr/uripath@${URIPATH_REF}"; fi
       - name: Install at the floors
         run: python -m pip install -c floors.txt -e ".[dev,all]"
@@ -147,10 +147,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install pathlib-next from the git ref, if one is set
+      - name: Install pathapi from the git ref, if one is set
         if: ${{ env.CORE_REF != '' }}
         shell: bash
-        run: python -m pip install "pathlib-next @ git+https://github.com/jose-pr/pathlib-next@${CORE_REF}"
+        run: python -m pip install "pathapi @ git+https://github.com/jose-pr/pathapi@${CORE_REF}"
       - name: Install the package, pytest and the two checkers
         # basedpyright, not the PyPI `pyright`: that one downloads node at
         # run time. The test accepts either.
@@ -231,7 +231,7 @@ jobs:
           python -m venv "$RUNNER_TEMP/full"
           for venv in bare full; do
             if [ -n "$CORE_REF" ]; then
-              "$RUNNER_TEMP/$venv/bin/pip" install "pathlib-next @ git+https://github.com/jose-pr/pathlib-next@${CORE_REF}"
+              "$RUNNER_TEMP/$venv/bin/pip" install "pathapi @ git+https://github.com/jose-pr/pathapi@${CORE_REF}"
             fi
           done
           if [ -n "$URIPATH_REF" ]; then
@@ -303,11 +303,11 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.x"
-      - name: Install pathlib-next and uripath from their git refs, if set
+      - name: Install pathapi and uripath from their git refs, if set
         if: ${{ env.CORE_REF != '' || env.URIPATH_REF != '' }}
         shell: bash
         run: |
-          if [ -n "$CORE_REF" ]; then python -m pip install "pathlib-next @ git+https://github.com/jose-pr/pathlib-next@${CORE_REF}"; fi
+          if [ -n "$CORE_REF" ]; then python -m pip install "pathapi @ git+https://github.com/jose-pr/pathapi@${CORE_REF}"; fi
           if [ -n "$URIPATH_REF" ]; then python -m pip install "uripath @ git+https://github.com/jose-pr/uripath@${URIPATH_REF}"; fi
       - name: Install package with docs tooling
         run: python -m pip install -e ".[all,docs]"

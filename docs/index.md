@@ -4,7 +4,7 @@
 user="deploy")` has the method names, signatures and exception types of
 `pathlib.Path`, over [paramiko](https://www.paramiko.org/) or
 [asyncssh](https://asyncssh.readthedocs.io/). It needs no URI and builds on
-[`pathlib-next`](https://jose-pr.github.io/pathlib-next/) alone, which holds the
+[`pathapi`](https://jose-pr.github.io/pathapi/) alone, which holds the
 `Path` base class, `glob`, `walk` and `PathSyncer`. With
 [`uripath`](https://jose-pr.github.io/uripath/) installed the same package also
 provides the `sftp:` scheme: `URIPath("sftp://deploy@files.example.org/srv/data")`.

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import typing as _ty
 
-from pathlib_next.providers import notimplemented as _notimplemented
+from pathapi.providers import notimplemented as _notimplemented
 
 if _ty.TYPE_CHECKING:
     from ._path import SFTPPath
@@ -87,7 +87,7 @@ class BaseSFTPBackend(object):
     def supported_checksums(self, path: "SFTPPath") -> "_ty.FrozenSet[str]":
         """Advisory set of algorithm names `checksum()` can currently
         produce against `path`'s server connection (see
-        `pathlib_next.protocols.checksum.NativeChecksum.supported_checksums`).
+        `pathapi.protocols.checksum.NativeChecksum.supported_checksums`).
         Empty here (the default): no native-hashing support at all. Both real
         backends override this with a per-connection probe against `path`
         (neither library exposes the server's extension list -- see
@@ -124,7 +124,7 @@ class BaseSFTPBackend(object):
         `NotImplementedError` (the base/default here) when the backend has
         no such capability at all, and MUST also raise it -- not return a
         value -- when the server doesn't advertise `algorithm` specifically
-        (see `pathlib_next.protocols.checksum.NativeChecksum.checksum` for
+        (see `pathapi.protocols.checksum.NativeChecksum.checksum` for
         why this is a hard contract, not a style choice). Both real
         backends implement it through
         `_checkfile.CheckFileSFTPBackend`, each supplying only the extended

@@ -26,7 +26,7 @@ from sftp_loopback import ANY_PASSWORD  # noqa: E402
 from sftp_support import make_path  # noqa: E402
 from waits import wait_until  # noqa: E402
 
-from pathlib_next import providers  # noqa: E402
+from pathapi import providers  # noqa: E402
 from sftppath import (  # noqa: E402
     DEFAULT_SSH_CONFIG,
     AsyncSSHBackend,
@@ -776,8 +776,8 @@ def test_copy_works_without_asyncssh_installed():
     result = run(
         """
         import io, stat, sys
-        from pathlib_next import FileStat
-        from pathlib_next.mempath import MemPath
+        from pathapi import FileStat
+        from pathapi.mempath import MemPath
         from sftppath import BaseSFTPBackend, SFTPPath, _select
 
         class Client:

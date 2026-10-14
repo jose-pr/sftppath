@@ -10,7 +10,7 @@ import threading as _thread
 import paramiko as _paramiko
 import paramiko.sftp as _paramiko_sftp
 from paramiko.sftp_attr import SFTPAttributes as _SFTPAttributes
-from pathlib_next import providers as _providers
+from pathapi import providers as _providers
 
 from . import _checkfile, _errors
 from ._backend import DEFAULT_PORT, SFTPEndpoint

@@ -8,9 +8,9 @@ import stat as _stat_mod
 
 import pytest
 
-import pathlib_next
-from pathlib_next.mempath import MemPath
-from pathlib_next.sync import PathAndStat, PathSyncer
+import pathapi
+from pathapi.mempath import MemPath
+from pathapi.sync import PathAndStat, PathSyncer
 from sftp_support import make_path
 
 from sftppath import BaseSFTPBackend
@@ -29,7 +29,7 @@ def _relative_symlink_source(tmp_path):
         os.symlink("real.txt", link)  # relative target, not resolved
     except (OSError, NotImplementedError) as error:
         pytest.skip(f"symlink unavailable: {error}")
-    return pathlib_next.LocalPath(link)
+    return pathapi.LocalPath(link)
 
 
 # --- cross-backend symlink sync (one side supports symlink_to(), the other
@@ -111,7 +111,7 @@ def test_sync_symlink_preserve_sftp_source_to_local_target(flavor, tmp_path):
     # supported/supported case across two DIFFERENT backend types.
     backend = _FakeSymlinkBackend()
     source = _fake_sftp(flavor, "link.txt", backend)
-    target = pathlib_next.LocalPath(tmp_path / "link_copy.txt")
+    target = pathapi.LocalPath(tmp_path / "link_copy.txt")
 
     PathSyncer(checksum, follow_symlinks=False).sync(source, target)
 

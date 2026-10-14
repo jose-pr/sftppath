@@ -9,8 +9,8 @@ import pytest
 
 pytest.importorskip("asyncssh")
 
-from pathlib_next import LocalPath  # noqa: E402
-from pathlib_next.sync import PathSyncer, SyncEvent  # noqa: E402
+from pathapi import LocalPath  # noqa: E402
+from pathapi.sync import PathSyncer, SyncEvent  # noqa: E402
 from sftp_support import make_backend, make_path  # noqa: E402
 
 from sftppath import SFTPPath  # noqa: E402

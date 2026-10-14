@@ -24,10 +24,10 @@ def fixture_tree(tmp_path):
           d.py
       empty_dir/
 
-    Built by the shipped `pathlib_next.testing.populate_fixture_tree()`, so
+    Built by the shipped `pathapi.testing.populate_fixture_tree()`, so
     the in-repo contracts and downstream users share one definition.
     """
-    from pathlib_next.testing import populate_fixture_tree
+    from pathapi.testing import populate_fixture_tree
 
     return populate_fixture_tree(tmp_path)
 

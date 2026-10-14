@@ -8,9 +8,9 @@ import stat as _stat
 import typing as _ty
 import urllib.parse as _urlparse
 
-from pathlib_next import FileStat
-from pathlib_next import providers as _providers
-from pathlib_next.providers import (
+from pathapi import FileStat
+from pathapi import providers as _providers
+from pathapi.providers import (
     TreePath,
     check_follow,
     contains,
@@ -38,7 +38,7 @@ class SFTPPath(TreePath):
     """A path on an SFTP server, over paramiko or asyncssh (see "backend
     selection" in `_select`). A request needs the `paramiko` or the `asyncssh`
     extra; naming, joining and comparing paths needs neither.
-    Also implements `pathlib_next.protocols.checksum.NativeChecksum`
+    Also implements `pathapi.protocols.checksum.NativeChecksum`
     (`checksum()`, delegating to `self.backend.checksum()`) -- native on both
     backends via the filexfer draft's `check-file-handle` extension where the
     server implements it (OpenSSH does not), `NotImplementedError` (falls back

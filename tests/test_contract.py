@@ -12,7 +12,7 @@ import pathlib
 import pytest
 
 from capabilities import stores_question_marks
-from pathlib_next.testing import PathContract
+from pathapi.testing import PathContract
 from sftp_support import make_backend, make_path
 
 

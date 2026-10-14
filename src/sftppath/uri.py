@@ -22,7 +22,7 @@ import threading as _threading
 import typing as _ty
 import weakref as _weakref
 
-from pathlib_next.providers import check_follow, copy_error_predicate
+from pathapi.providers import check_follow, copy_error_predicate
 from uripath import URI
 from uripath.schemes import DelegatingURIPath, URIPath
 from uripath.source import Source, fold_host, same_authority

@@ -9,7 +9,7 @@ commands, CI and release. It is not the API reference and it does not ship.
 
 [`docs/divergences.md`](docs/divergences.md) records every deliberate difference
 from `pathlib.Path` that this package owns; the ones of the generic `Path`
-operations are on the site of `pathlib-next`. `pathlib.Path` parity is the
+operations are on the site of `pathapi`. `pathlib.Path` parity is the
 contract; a behavioral divergence that is not recorded is a bug.
 
 ## Layout
@@ -18,7 +18,7 @@ contract; a behavioral divergence that is not recorded is a bug.
 | --- | --- |
 | `src/sftppath/` | The package (`src/` layout). `py.typed` and the API header ship with it. |
 | `src/sftppath/__init__.py`, `exceptions.py`, `uri.py` | The public modules: the root exports `SFTPPath` and the backends (the two real ones lazily, so `import sftppath` loads no SSH library), `exceptions.py` the errors, `uri.py` the `sftp:` scheme (imports `uripath`; without it the import raises an `ImportError` naming the `uri` extra). |
-| `src/sftppath/_path.py`, `_backend.py` | `SFTPPath` (the protocol logic: requests, error mapping, rename and replace, the native-walk dispatch, on `pathlib_next.providers.TreePath`) and the backend contract. |
+| `src/sftppath/_path.py`, `_backend.py` | `SFTPPath` (the protocol logic: requests, error mapping, rename and replace, the native-walk dispatch, on `pathapi.providers.TreePath`) and the backend contract. |
 | `src/sftppath/_paramiko.py`, `_asyncssh/` | The two backends. `_asyncssh/` is a package of private modules: the shared loop (`_loop`), error translation (`_translate`), attributes, file and client wrappers, the connection cache, connecting, the backend and the native recursive walks (`_walk`). |
 | `src/sftppath/_checkfile.py`, `_sshconfig.py`, `_errors.py`, `_select.py`, `_exit.py` | The `check-file-handle` checksums, ssh_config handling and host validation, the error builders, backend selection and the flush of files left open at exit. |
 | `tests/` | The pytest suite. `tests/conftest.py` holds the loopback servers' fixtures, `tests/sftp_loopback.py` the counting SSH server, `tests/sftp_support.py` the helpers that build a backend and a path; `tests/mutation/` is the mutation list; `tests/probes/` are child processes that tests run. |
@@ -47,9 +47,9 @@ test and build tools; `all` is both SSH libraries and `uripath`. The tests use
 the SSH libraries as servers too, so a suite run without one skips what needs
 it.
 
-`pathlib-next` and `uripath` are dependencies. While the releases this package
+`pathapi` and `uripath` are dependencies. While the releases this package
 asks for are not on PyPI, install both editable from their checkouts first (`pip
-install -e ../pathlib-next -e ../uripath`), then this package.
+install -e ../pathapi -e ../uripath`), then this package.
 
 A missing library does not fail the suite: its tests are skipped instead, so
 check `pytest -rs` before trusting a green run. A venv holding both SSH libraries
@@ -109,7 +109,7 @@ performance claims in the changelog or release notes come from CI runs
 
 Workflows live in `.github/workflows/`:
 
-- `test.yml` runs on `workflow_dispatch` (inputs: `ref`, `pathlib_next_ref`,
+- `test.yml` runs on `workflow_dispatch` (inputs: `ref`, `pathapi_ref`,
   `uripath_ref`, `benchmark`) or on a pushed `ci-*` tag, never on ordinary
   pushes. To test a commit without the dashboard, push a uniquely named
   throwaway tag (`ci-<topic>-<timestamp>`), follow the run to completion, then
@@ -128,15 +128,15 @@ Workflows live in `.github/workflows/`:
 - `docs.yml` owns every GitHub Pages deploy: on a push to `main` that touches the
   docs sources and on `workflow_dispatch`, which `release.yml` fires for a final
   tag.
-- **Which `pathlib-next` and `uripath` the jobs install.** Every job that
+- **Which `pathapi` and `uripath` the jobs install.** Every job that
   installs the package first installs them from
   `git+https://github.com/jose-pr/<repository>@<ref>` when a ref is given: the
-  `pathlib_next_ref` and `uripath_ref` inputs of a manual run of `test.yml` or
-  `docs.yml`, else the repository variables `PATHLIB_NEXT_REF` and `URIPATH_REF`
+  `pathapi_ref` and `uripath_ref` inputs of a manual run of `test.yml` or
+  `docs.yml`, else the repository variables `PATHAPI_REF` and `URIPATH_REF`
   (the only source for a `ci-*` tag and for `release.yml`). With neither, pip
   takes the release range from PyPI. A ref must hold a version inside that
   range. Set the variables while the releases are not on PyPI (`gh variable set
-  PATHLIB_NEXT_REF --body <branch-or-sha>`), delete them afterwards.
+  PATHAPI_REF --body <branch-or-sha>`), delete them afterwards.
   `release.yml` refuses a final tag while either is set.
 
 ## Conventions
@@ -178,9 +178,9 @@ Workflows live in `.github/workflows/`:
    it by exit code.
 5. Push `main`, then the `v*` tag. Publishing is irreversible, so the tag is
    pushed only with the maintainer's explicit consent for that specific
-   release. The releases the dependency ranges ask of `pathlib-next` and
+   release. The releases the dependency ranges ask of `pathapi` and
    `uripath` must be on PyPI first, and the repository variables
-   `PATHLIB_NEXT_REF` and `URIPATH_REF` deleted.
+   `PATHAPI_REF` and `URIPATH_REF` deleted.
 
 Once per repository, before the first release: create `jose-pr/sftppath` on
 GitHub; register PyPI Trusted Publishing for the project `sftppath` (workflow

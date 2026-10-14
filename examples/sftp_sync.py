@@ -17,8 +17,8 @@ import os
 import sys
 import tempfile
 
-from pathlib_next import LocalPath
-from pathlib_next.sync import PathAndStat, PathSyncer
+from pathapi import LocalPath
+from pathapi.sync import PathAndStat, PathSyncer
 from sftppath import SFTPPath
 
 

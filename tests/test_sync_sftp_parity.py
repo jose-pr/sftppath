@@ -28,8 +28,8 @@ import asyncssh  # noqa: E402
 import asyncssh.sftp as asftp  # noqa: E402
 import sftppath  # noqa: E402
 from asyncssh.packet import String  # noqa: E402
-from pathlib_next.mempath import MemPath  # noqa: E402
-from pathlib_next.sync import PathSyncer, SyncEvent  # noqa: E402
+from pathapi.mempath import MemPath  # noqa: E402
+from pathapi.sync import PathSyncer, SyncEvent  # noqa: E402
 from sftp_support import make_backend, make_path  # noqa: E402
 from sftppath import _checkfile  # noqa: E402
 from sftppath._asyncssh import _file, _loop  # noqa: E402

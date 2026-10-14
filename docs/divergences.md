@@ -9,8 +9,8 @@ both must be listed here -- no silent divergence.
 The divergences below apply to `SFTPPath` and `SFTPURIPath`. The ones of the
 generic `Path` operations that every path inherits (`touch()` on a non-local
 backend, `rm()` and its policies, `chown()`, `Path.replace()`, a `with` block
-that raised while writing) are on the documentation site of `pathlib-next`,
-<https://jose-pr.github.io/pathlib-next/divergences/>.
+that raised while writing) are on the documentation site of `pathapi`,
+<https://jose-pr.github.io/pathapi/divergences/>.
 
 | Method | `pathlib` | `SFTPPath` | Why |
 | --- | --- | --- | --- |

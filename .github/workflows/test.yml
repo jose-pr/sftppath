@@ -15,8 +15,8 @@ on:
         description: "Git ref to test (branch, tag, or SHA)"
         required: false
         default: ""
-      pathlib_next_ref:
-        description: "Git ref of jose-pr/pathlib-next to install instead of the release (branch, tag, or SHA); empty uses the repository variable PATHLIB_NEXT_REF"
+      pathapi_ref:
+        description: "Git ref of jose-pr/pathapi to install instead of the release (branch, tag, or SHA); empty uses the repository variable PATHAPI_REF"
         required: false
         default: ""
       uripath_ref:
@@ -40,13 +40,13 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # The pathlib-next and the uripath every job that needs them installs first:
-  # a git ref of jose-pr/pathlib-next (jose-pr/uripath) from the dispatch input,
-  # else from the repository variable PATHLIB_NEXT_REF (URIPATH_REF); a ci-* tag
+  # The pathapi and the uripath every job that needs them installs first:
+  # a git ref of jose-pr/pathapi (jose-pr/uripath) from the dispatch input,
+  # else from the repository variable PATHAPI_REF (URIPATH_REF); a ci-* tag
   # has no input. With both empty, pip takes the release range that
   # pyproject.toml declares from PyPI. A ref must hold a version inside that
   # range.
-  CORE_REF: ${{ inputs.pathlib_next_ref || vars.PATHLIB_NEXT_REF }}
+  CORE_REF: ${{ inputs.pathapi_ref || vars.PATHAPI_REF }}
   URIPATH_REF: ${{ inputs.uripath_ref || vars.URIPATH_REF }}
 
 jobs:
@@ -86,12 +86,12 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install pathlib-next and uripath from their git refs, if set
+      - name: Install pathapi and uripath from their git refs, if set
         if: ${{ env.CORE_REF != '' || env.URIPATH_REF != '' }}
         # They go in first, so the step below finds their ranges satisfied.
         shell: bash
         run: |
-          if [ -n "$CORE_REF" ]; then python -m pip install "pathlib-next @ git+https://github.com/jose-pr/pathlib-next@${CORE_REF}"; fi
+          if [ -n "$CORE_REF" ]; then python -m pip install "pathapi @ git+https://github.com/jose-pr/pathapi@${CORE_REF}"; fi
           if [ -n "$URIPATH_REF" ]; then python -m pip install "uripath @ git+https://github.com/jose-pr/uripath@${URIPATH_REF}"; fi
       - name: Install the package with both SSH libraries, uripath and its test tools
         # A missing library skips its tests (pytest.importorskip) instead of
@@ -119,10 +119,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install pathlib-next from the git ref, if one is set
+      - name: Install pathapi from the git ref, if one is set
         if: ${{ env.CORE_REF != '' }}
         shell: bash
-        run: python -m pip install "pathlib-next @ git+https://github.com/jose-pr/pathlib-next@${CORE_REF}"
+        run: python -m pip install "pathapi @ git+https://github.com/jose-pr/pathapi@${CORE_REF}"
       - name: Install the package with both SSH libraries and no uripath
         run: python -m pip install -e ".[dev,paramiko,asyncssh]"
       - name: Importing the URI module names the extra
@@ -160,10 +160,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install pathlib-next from the git ref, if one is set
+      - name: Install pathapi from the git ref, if one is set
         if: ${{ env.CORE_REF != '' }}
         shell: bash
-        run: python -m pip install "pathlib-next @ git+https://github.com/jose-pr/pathlib-next@${CORE_REF}"
+        run: python -m pip install "pathapi @ git+https://github.com/jose-pr/pathapi@${CORE_REF}"
       - name: Install the package with pytest and nothing else
         run: python -m pip install -e . pytest
       - name: Import it; no optional library is loaded; a request names both extras
@@ -223,12 +223,12 @@ jobs:
                   pins.append("%s==%s" % (m.group(1), m.group(3)))
           open("floors.txt", "w").write("\n".join(pins) + "\n")
           print("\n".join(pins) or "(no floors declared)")
-      - name: Install pathlib-next and uripath from their git refs, if set
+      - name: Install pathapi and uripath from their git refs, if set
         if: ${{ env.CORE_REF != '' || env.URIPATH_REF != '' }}
         # Without a ref the release is installed at its floor, below.
         shell: bash
         run: |
-          if [ -n "$CORE_REF" ]; then python -m pip install "pathlib-next @ git+https://github.com/jose-pr/pathlib-next@${CORE_REF}"; fi
+          if [ -n "$CORE_REF" ]; then python -m pip install "pathapi @ git+https://github.com/jose-pr/pathapi@${CORE_REF}"; fi
           if [ -n "$URIPATH_REF" ]; then python -m pip install "uripath @ git+https://github.com/jose-pr/uripath@${URIPATH_REF}"; fi
       - name: Install at the floors
         run: python -m pip install -c floors.txt -e ".[dev,all]"
@@ -252,10 +252,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install pathlib-next from the git ref, if one is set
+      - name: Install pathapi from the git ref, if one is set
         if: ${{ env.CORE_REF != '' }}
         shell: bash
-        run: python -m pip install "pathlib-next @ git+https://github.com/jose-pr/pathlib-next@${CORE_REF}"
+        run: python -m pip install "pathapi @ git+https://github.com/jose-pr/pathapi@${CORE_REF}"
       - name: Install the package, pytest and the two checkers
         # basedpyright, not the PyPI `pyright`: that one downloads node at
         # run time. The test accepts either. Both SSH libraries, because the
@@ -286,11 +286,11 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
-      - name: Install pathlib-next and uripath from their git refs, if set
+      - name: Install pathapi and uripath from their git refs, if set
         if: ${{ env.CORE_REF != '' || env.URIPATH_REF != '' }}
         shell: bash
         run: |
-          if [ -n "$CORE_REF" ]; then python -m pip install "pathlib-next @ git+https://github.com/jose-pr/pathlib-next@${CORE_REF}"; fi
+          if [ -n "$CORE_REF" ]; then python -m pip install "pathapi @ git+https://github.com/jose-pr/pathapi@${CORE_REF}"; fi
           if [ -n "$URIPATH_REF" ]; then python -m pip install "uripath @ git+https://github.com/jose-pr/uripath@${URIPATH_REF}"; fi
       - name: Install benchmark dependencies
         run: python -m pip install -e ".[dev,all]"

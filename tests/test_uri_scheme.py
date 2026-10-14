@@ -11,7 +11,7 @@ import pytest
 
 pytest.importorskip("uripath")
 
-from pathlib_next import LocalPath, Path
+from pathapi import LocalPath, Path
 from uripath import URIPath
 
 from child import run
