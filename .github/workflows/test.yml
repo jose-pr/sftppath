@@ -142,9 +142,9 @@ jobs:
         run: python -m pytest -q -rs
 
   # The package as a user gets it from `pip install sftppath`: no SSH library,
-  # no uripath, none of `dev` but pytest. The import loads nothing optional, the
-  # first use of a path names both extras, and the tests that need nothing else
-  # run (the rest skip, and -rs says which).
+  # no uripath, none of `dev` but pytest. The import loads nothing optional, a
+  # path can be built and its first request names both extras, and the tests
+  # that need nothing else run (the rest skip, and -rs says which).
   bare:
     name: Bare install (py${{ matrix.python-version }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -166,7 +166,7 @@ jobs:
         run: python -m pip install "pathlib-next @ git+https://github.com/jose-pr/pathlib-next@${CORE_REF}"
       - name: Install the package with pytest and nothing else
         run: python -m pip install -e . pytest
-      - name: Import it; no optional library is loaded; a path names both extras
+      - name: Import it; no optional library is loaded; a request names both extras
         shell: python
         run: |
           import sys
@@ -175,13 +175,14 @@ jobs:
 
           loaded = {"paramiko", "asyncssh", "uripath"} & set(sys.modules)
           assert not loaded, "importing sftppath loaded %s" % sorted(loaded)
+          path = sftppath.SFTPPath("/x", host="h")
           try:
-              sftppath.SFTPPath("/x", host="h")
+              path.stat()
           except ImportError as error:
               assert "sftppath[paramiko]" in str(error) and "sftppath[asyncssh]" in str(error), error
               print("ok:", sftppath.__version__)
           else:
-              raise SystemExit("a path was built with no SSH library")
+              raise SystemExit("a request was made with no SSH library")
       - name: Run the tests that need nothing else
         run: python -m pytest -q -rs
 
