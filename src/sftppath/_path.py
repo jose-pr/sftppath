@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import contextvars as _contextvars
 import errno as _errno
 import ipaddress as _ipaddress
 import os as _os
 import posixpath as _posix
 import stat as _stat
-import threading as _threading
 import typing as _ty
 import urllib.parse as _urlparse
-import weakref as _weakref
 
 from pathlib_next import FileStat
 from pathlib_next import providers as _providers
@@ -17,64 +14,16 @@ from pathlib_next.providers import check_follow, contains, copy_error_predicate
 
 from ._base import BaseSFTPBackend, SFTPEndpoint
 from ._exit import _track_unclosed
+from ._namespace import _namespace_of
+from ._rename import (
+    _REPLACING,
+    _mark_posix_rename_unsupported,
+    _posix_rename_known_unsupported,
+)
 from ._select import _resolve_default_backend_cls
 from ._sshconfig import DEFAULT_SSH_CONFIG, UNSET
 from ._tree import TreePath
 from .exceptions import SFTPAuthenticationError
-
-#: SFTP clients on which `posix-rename@openssh.com` proved unavailable (the
-#: extension request failed and a plain rename then succeeded), so later
-#: renames skip the doomed request. Weak: a reconnect starts over.
-_NO_POSIX_RENAME: "_weakref.WeakKeyDictionary" = _weakref.WeakKeyDictionary()
-
-
-def _posix_rename_known_unsupported(client) -> bool:
-    try:
-        return client in _NO_POSIX_RENAME
-    except TypeError:
-        return False
-
-
-def _mark_posix_rename_unsupported(client) -> None:
-    try:
-        _NO_POSIX_RENAME[client] = True
-    except TypeError:
-        pass
-
-
-#: The `(source, target)` of the `SFTPPath.replace()` that handed its work to
-#: the generic `replace()`, so that `move()` calling `replace()` again knows
-#: it is the same call.
-_REPLACING: "_contextvars.ContextVar[tuple | None]" = _contextvars.ContextVar(
-    "sftppath_replacing", default=None
-)
-
-
-class _Namespace:
-    """What two paths share when they resolve their names on one server: the
-    object `_node_key()` hands out for an endpoint."""
-
-    __slots__ = ("endpoint", "__weakref__")
-
-    def __init__(self, endpoint):
-        self.endpoint = endpoint
-
-
-_NAMESPACES: "_weakref.WeakValueDictionary[object, _Namespace]" = (
-    _weakref.WeakValueDictionary()
-)
-_NAMESPACES_LOCK = _threading.Lock()
-
-
-def _namespace_of(backend: BaseSFTPBackend) -> object:
-    endpoint = backend.endpoint
-    if endpoint is None:
-        return backend
-    with _NAMESPACES_LOCK:
-        found = _NAMESPACES.get(endpoint)
-        if found is None:
-            found = _NAMESPACES[endpoint] = _Namespace(endpoint)
-        return found
 
 
 def _rebuild_path(cls, text, backend):

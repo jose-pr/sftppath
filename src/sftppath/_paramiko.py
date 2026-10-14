@@ -14,74 +14,19 @@ from pathlib_next import providers as _providers
 
 from . import _checkfile, _errors
 from ._base import DEFAULT_PORT, SFTPEndpoint
+from ._paramiko_config import _SSHConfig, _lookup_ssh_config
 
 # The sentinel and path normalization are paramiko-free and live in `_sshconfig`.
 from ._sshconfig import (
     DEFAULT_SSH_CONFIG,
     _Sentinel,
     _check_host,
-    _expand_includes,
     _expand_proxy_command,
-    _normalize_config_paths,
 )
 
 #: Sentinel for `SFTPBackend(known_hosts=...)`: the user's `~/.ssh/known_hosts`
 #: plus every `UserKnownHostsFile` the ssh_config names for the host.
 _DEFAULT_KNOWN_HOSTS = _Sentinel(__name__, "_DEFAULT_KNOWN_HOSTS")
-
-
-class _SSHConfig(_paramiko.SSHConfig):
-    """paramiko's parser, except that a ProxyCommand comes back with its
-    ``%`` tokens unexpanded: ``SFTPBackend.opts()`` expands them with the host,
-    port and user chosen for the connection, which a lookup by host name
-    alone cannot know."""
-
-    TOKENS_BY_CONFIG_KEY = {
-        **_paramiko.SSHConfig.TOKENS_BY_CONFIG_KEY,
-        "proxycommand": ["~"],
-    }
-
-
-def _file_stamps(config_paths: "tuple[str, ...]") -> tuple:
-    """`(path, modification time, size)` of each config file that exists, so
-    a parsed config is not reused after the file changed."""
-    stamps = []
-    for path in config_paths:
-        try:
-            info = _pathlib.Path(path).expanduser().stat()
-        except OSError:
-            continue
-        stamps.append((path, info.st_mtime_ns, info.st_size))
-    return tuple(stamps)
-
-
-@_providers.LRU
-def _load_ssh_config(
-    config_paths: "tuple[str, ...]", stamps: tuple = ()
-) -> "_SSHConfig | None":
-    config = _SSHConfig()
-    loaded = False
-    for path in config_paths:
-        ssh_path = _pathlib.Path(path).expanduser()
-        if not ssh_path.is_file():
-            continue
-        # paramiko's parser has no Include support: expand it first.
-        config.parse(_expand_includes(ssh_path))
-        loaded = True
-    return config if loaded else None
-
-
-def _lookup_ssh_config(
-    host: str,
-    ssh_config: "object",
-) -> "dict[str, object]":
-    config_paths = _normalize_config_paths(ssh_config)
-    if not config_paths:
-        return {}
-    config = _load_ssh_config(config_paths, _file_stamps(config_paths))
-    if config is None:
-        return {}
-    return config.lookup(host)
 
 
 # --- the SFTP client ---------------------------------------------------------
