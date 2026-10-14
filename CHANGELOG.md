@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-14
+
 The first release of `sftppath`: the SFTP support of `pathlib-next` 0.9.14
 (`pathlib_next.uri.schemes.sftp`) as a distribution of its own, with a path that
 needs no URI. It needs Python 3.9 or newer and `pathlib-next>=0.10.0,<0.11`.
@@ -94,3 +96,6 @@ it.
   yields carry them, as before.
 - An error that has a file name and no second one prints only the first; it
   printed `-> None` after it.
+
+[Unreleased]: https://github.com/jose-pr/sftppath/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/jose-pr/sftppath/releases/tag/v0.1.0
