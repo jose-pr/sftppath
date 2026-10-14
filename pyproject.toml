@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sftppath"
-version = "0.10.0"
+version = "0.1.0"
 authors = [{ name = "Jose A" }]
 description = "pathlib-style paths for SFTP servers, on paramiko or asyncssh, and the sftp: scheme for uripath"
 readme = "README.md"
@@ -43,7 +43,7 @@ asyncssh = [
     "asyncssh>=2.20.0,<3; python_version>='3.10'",
 ]
 # The sftp: scheme of uripath. `import sftppath` never imports uripath.
-uri = ["uripath>=0.10.0,<0.11"]
+uri = ["uripath>=0.1.0,<0.2"]
 all = ["sftppath[paramiko,asyncssh,uri]"]
 dev = [
     'build',
