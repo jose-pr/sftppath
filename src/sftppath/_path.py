@@ -10,7 +10,12 @@ import urllib.parse as _urlparse
 
 from pathlib_next import FileStat
 from pathlib_next import providers as _providers
-from pathlib_next.providers import check_follow, contains, copy_error_predicate
+from pathlib_next.providers import (
+    TreePath,
+    check_follow,
+    contains,
+    copy_error_predicate,
+)
 
 from ._base import BaseSFTPBackend, SFTPEndpoint
 from ._exit import _track_unclosed
@@ -22,7 +27,6 @@ from ._rename import (
 )
 from ._select import _resolve_default_backend_cls
 from ._sshconfig import DEFAULT_SSH_CONFIG, UNSET
-from ._tree import TreePath
 from .exceptions import SFTPAuthenticationError
 
 
