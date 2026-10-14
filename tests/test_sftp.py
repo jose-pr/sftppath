@@ -1141,6 +1141,49 @@ def test_recursive_rm_tells_the_backends_walk_whether_to_skip_errors():
     assert seen == [root]
 
 
+class _CopyBackend(_TreeBackend):
+    """A backend with a walk of its own for `copy()` too."""
+
+    def __init__(self):
+        super().__init__()
+        self.tree_copy_calls = []
+
+    def tree_copy(self, path, target, **kwargs):
+        self.tree_copy_calls.append((path.as_posix(), target.as_posix()))
+
+
+def test_recursive_copy_of_a_directory_within_one_server_is_the_backends_walk(
+    monkeypatch,
+):
+    monkeypatch.setattr(SFTPPath, "is_dir", lambda self, **kw: True)
+    monkeypatch.setattr(SFTPPath, "exists", lambda self, **kw: True)
+    backend = _CopyBackend()
+
+    _sftp("/src", backend).copy(_sftp("/dst", backend), recursive=True, overwrite=True)
+
+    assert backend.tree_copy_calls == [("/src", "/dst")]
+
+
+def test_recursive_copy_to_another_class_or_server_is_not_the_backends_walk(
+    monkeypatch,
+):
+    from pathlib_next import LocalPath, Path
+
+    copied = []
+    monkeypatch.setattr(Path, "copy", lambda self, target, **kw: copied.append(target))
+    monkeypatch.setattr(SFTPPath, "is_dir", lambda self, **kw: True)
+    backend = _CopyBackend()
+    source = _sftp("/src", backend)
+    local = LocalPath("dl").absolute()
+    elsewhere = _sftp("/dst", _CopyBackend())
+
+    source.copy(local, recursive=True)
+    source.copy(elsewhere, recursive=True)
+
+    assert copied == [local, elsewhere]
+    assert backend.tree_copy_calls == []
+
+
 def test_rm_that_is_not_recursive_does_not_use_the_backends_walk():
     client = _LinkAndRenameClient({"/f": "file"})
     backend = _TreeBackend()

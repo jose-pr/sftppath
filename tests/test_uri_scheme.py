@@ -373,7 +373,11 @@ def test_the_walk_is_not_used_for_a_foreign_target_or_a_second_supplied_backend(
     SFTPURIPath.copy(src, other_host, recursive=True)
     second = URIPath("sftp://a.invalid/backup", backend=AsyncSSHBackend("a.invalid"))
     SFTPURIPath.copy(src, second, recursive=True)
-    assert calls == [local, other_host, second]
+    shared = SFTPURIBackend(AsyncSSHBackend)
+    on_a = URIPath("sftp://a.invalid/data", backend=shared)
+    on_b = URIPath("sftp://b.invalid/backup", backend=shared)
+    SFTPURIPath.copy(on_a, on_b, recursive=True)
+    assert calls == [local, other_host, second, on_b]
 
 
 def test_rename_and_hardlink_to_another_host_raise_not_implemented():
