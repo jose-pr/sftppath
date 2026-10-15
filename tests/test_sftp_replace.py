@@ -234,7 +234,9 @@ def test_replace_onto_another_server_copies_and_deletes(
     assert (other_root / "b.txt").read_bytes() == b"from a"
     assert not (sftp_root / "a.txt").exists()
     assert sftp_wire.calls["posix_rename"] == 0
-    assert other.wire.calls["posix_rename"] == 0
+    # The core may stage the copy beside the target and swap it in with one rename.
+    assert other.wire.calls["posix_rename"] <= 1
+    assert sorted(p.name for p in other_root.iterdir()) == ["b.txt"]
 
 
 def test_replace_of_a_path_onto_itself_keeps_the_file(
