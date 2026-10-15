@@ -76,7 +76,7 @@ jobs:
         shell: bash
         run: |
           if [ -n "$CORE_REF" ]; then python -m pip install "pathapi @ git+https://github.com/jose-pr/pathapi@${CORE_REF}"; fi
-          if [ -n "$URIPATH_REF" ]; then python -m pip install "uripath @ git+https://github.com/jose-pr/uripath@${URIPATH_REF}"; fi
+          if [ -n "$URIPATH_REF" ]; then python -m pip install "pathapi-uri @ git+https://github.com/jose-pr/uripath@${URIPATH_REF}"; fi
       - name: Install package with docs tooling
         run: python -m pip install -e ".[all,docs]"
       - name: Build docs

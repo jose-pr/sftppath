@@ -43,7 +43,7 @@ asyncssh = [
     "asyncssh>=2.20.0,<3; python_version>='3.10'",
 ]
 # The sftp: scheme of uripath. `import sftppath` never imports uripath.
-uri = ["uripath>=0.1.0,<0.2"]
+uri = ["pathapi-uri>=0.1.0,<0.2"]
 all = ["sftppath[paramiko,asyncssh,uri]"]
 dev = [
     'build',

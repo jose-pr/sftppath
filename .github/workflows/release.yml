@@ -59,7 +59,7 @@ jobs:
         shell: bash
         run: |
           if [ -n "$CORE_REF" ]; then python -m pip install "pathapi @ git+https://github.com/jose-pr/pathapi@${CORE_REF}"; fi
-          if [ -n "$URIPATH_REF" ]; then python -m pip install "uripath @ git+https://github.com/jose-pr/uripath@${URIPATH_REF}"; fi
+          if [ -n "$URIPATH_REF" ]; then python -m pip install "pathapi-uri @ git+https://github.com/jose-pr/uripath@${URIPATH_REF}"; fi
       - name: Install the package with both SSH libraries, uripath and its test tools
         run: python -m pip install -e ".[dev,all]"
       - name: Run tests
@@ -126,7 +126,7 @@ jobs:
         shell: bash
         run: |
           if [ -n "$CORE_REF" ]; then python -m pip install "pathapi @ git+https://github.com/jose-pr/pathapi@${CORE_REF}"; fi
-          if [ -n "$URIPATH_REF" ]; then python -m pip install "uripath @ git+https://github.com/jose-pr/uripath@${URIPATH_REF}"; fi
+          if [ -n "$URIPATH_REF" ]; then python -m pip install "pathapi-uri @ git+https://github.com/jose-pr/uripath@${URIPATH_REF}"; fi
       - name: Install at the floors
         run: python -m pip install -c floors.txt -e ".[dev,all]"
       - name: Run tests
@@ -235,7 +235,7 @@ jobs:
             fi
           done
           if [ -n "$URIPATH_REF" ]; then
-            "$RUNNER_TEMP/full/bin/pip" install "uripath @ git+https://github.com/jose-pr/uripath@${URIPATH_REF}"
+            "$RUNNER_TEMP/full/bin/pip" install "pathapi-uri @ git+https://github.com/jose-pr/uripath@${URIPATH_REF}"
           fi
           "$RUNNER_TEMP/bare/bin/pip" install "$wheel"
           "$RUNNER_TEMP/full/bin/pip" install "$wheel[all]"
@@ -308,7 +308,7 @@ jobs:
         shell: bash
         run: |
           if [ -n "$CORE_REF" ]; then python -m pip install "pathapi @ git+https://github.com/jose-pr/pathapi@${CORE_REF}"; fi
-          if [ -n "$URIPATH_REF" ]; then python -m pip install "uripath @ git+https://github.com/jose-pr/uripath@${URIPATH_REF}"; fi
+          if [ -n "$URIPATH_REF" ]; then python -m pip install "pathapi-uri @ git+https://github.com/jose-pr/uripath@${URIPATH_REF}"; fi
       - name: Install package with docs tooling
         run: python -m pip install -e ".[all,docs]"
       - name: Build docs (gate only)

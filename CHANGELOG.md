@@ -14,7 +14,7 @@ The first release of `sftppath`: the SFTP support of `pathlib-next` 0.9.14
 needs no URI. It needs Python 3.9 or newer and `pathapi>=0.1.0,<0.2`.
 Neither SSH library is required to import it: the extras `paramiko`
 (`paramiko>=5.0,<6`) and `asyncssh` (`asyncssh>=2.20.0`, below 3) add one, and
-`uri` (`uripath>=0.1.0,<0.2`) adds the `sftp:` scheme. With neither SSH library a
+`uri` (`pathapi-uri>=0.1.0,<0.2`) adds the `sftp:` scheme. With neither SSH library a
 path can still be built, joined and compared, and its first request raises an
 `ImportError` that names both extras; naming `SFTPBackend` or `AsyncSSHBackend`
 without its library raises one that names its extra. Under *Changed*, the
