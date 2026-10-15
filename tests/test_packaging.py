@@ -74,7 +74,7 @@ def test_the_extras_are_the_two_libraries_the_scheme_and_their_union(project):
     assert names == {
         "paramiko": {"paramiko"},
         "asyncssh": {"asyncssh"},
-        "uri": {"uripath"},
+        "uri": {"pathapi-uri"},
         "all": {"sftppath"},
     }
     assert extras["all"] == ["sftppath[paramiko,asyncssh,uri]"]
