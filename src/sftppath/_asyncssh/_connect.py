@@ -7,6 +7,7 @@ import typing as _ty
 
 import asyncssh as _asyncssh
 
+from .. import _errors
 from .._sshconfig import _check_host, _check_proxy_user
 from . import _loop as _bridge
 from ._cache import _ConnectionEntry
@@ -63,13 +64,33 @@ async def _aconnect(
         kwargs["password"] = password
     conn = await _asyncssh.connect(host, **kwargs)
     try:
-        # Request the configured SFTP version (3 or 4) and let the server negotiate down
-        # (OpenSSH stays at v3). Names that are not UTF-8 come back as lone surrogates
-        # and go back out as the same bytes.
-        aclient = await conn.start_sftp_client(
-            sftp_version=sftp_version, path_errors="surrogateescape"
-        )
+        aclient = await _astart_sftp(conn, sftp_version)
     except BaseException:
         conn.close()
         raise
     return _ConnectionEntry(conn, _SyncSFTPClient(aclient, timeout))
+
+
+async def _astart_sftp(
+    conn: "_asyncssh.SSHClientConnection", sftp_version: int
+) -> "_asyncssh.SFTPClient":
+    # Request the configured SFTP version (3 or 4) and let the server negotiate down
+    # (OpenSSH stays at v3). Names that are not UTF-8 come back as lone surrogates
+    # and go back out as the same bytes.
+    return await conn.start_sftp_client(
+        sftp_version=sftp_version, path_errors="surrogateescape"
+    )
+
+
+async def _aopen_on(
+    conn: "_asyncssh.SSHClientConnection",
+    sftp_version: int,
+    timeout: "float | None",
+    caller: "_bridge._CallerLoop",
+) -> _ConnectionEntry:
+    """An SFTP channel on a connection the caller opened and keeps: only the
+    channel belongs to the entry."""
+    if conn.is_closed():
+        raise _errors.connection_closed()
+    aclient = await _astart_sftp(conn, sftp_version)
+    return _ConnectionEntry(conn, _SyncSFTPClient(aclient, timeout, caller), False)

@@ -59,18 +59,21 @@ class _SyncSFTPClient:
     `check-file-handle`, a missing `posix-rename@openssh.com`) are keyed on
     this object, and without `__weakref__` they are silently never kept."""
 
-    __slots__ = ("_aclient", "_timeout", "__weakref__")
+    __slots__ = ("_aclient", "_timeout", "_caller", "__weakref__")
 
     def __init__(
         self,
         aclient: "_asyncssh.SFTPClient",
         timeout: "float | None" = _bridge._UNSET_TIMEOUT,
+        caller: "_bridge._CallerLoop | None" = None,
     ):
         self._aclient = aclient
         self._timeout = timeout
+        #: The loop `aclient` is bound to when it is not the bridge loop.
+        self._caller = caller
 
     def _run(self, coro):
-        return _bridge._run(coro, self._timeout)
+        return _bridge._run(coro, self._timeout, self._caller)
 
     @_reraise_sftp_errors
     def stat(self, path: str) -> _StatAdapter:
@@ -97,7 +100,7 @@ class _SyncSFTPClient:
         # asyncio.run_coroutine_threadsafe() rejects; `_aopen` wraps the `await` in a
         # real coroutine.
         afile = self._run(_aopen(self._aclient, path, mode))
-        raw = _SyncSFTPFile(afile, self._timeout, mode, path)
+        raw = _SyncSFTPFile(afile, self._timeout, mode, path, self._caller)
         if buffering == 0:
             return raw
         # Buffered like paramiko's files and a local open(): a raw handle
@@ -179,7 +182,9 @@ class _SyncSFTPClient:
         `NotImplementedError`, as an unsupported operation is."""
         try:
             return _bridge._run(
-                _acheck_file(self._aclient, file._afile.handle, algorithm), None
+                _acheck_file(self._aclient, file._afile.handle, algorithm),
+                None,
+                self._caller,
             )
         except _asyncssh.SFTPBadMessage:
             raise NotImplementedError(

@@ -759,7 +759,7 @@ def test_sftppath_copy_recursive_uses_concurrent_helper(monkeypatch):
 
     run_timeouts = []
 
-    def _fake_run(coro, timeout="unset"):
+    def _fake_run(coro, timeout="unset", caller=None):
         run_timeouts.append(timeout)
         return asyncio.run(coro)
 
@@ -917,7 +917,7 @@ def test_sftppath_rm_recursive_uses_concurrent_helper(monkeypatch):
 
     run_timeouts = []
 
-    def _fake_run(coro, timeout="unset"):
+    def _fake_run(coro, timeout="unset", caller=None):
         run_timeouts.append(timeout)
         return asyncio.run(coro)
 
@@ -955,7 +955,7 @@ def _recursive_rm_with(monkeypatch, **policies):
 
     monkeypatch.setattr(backend_mod, "_concurrent_rm", _fake_concurrent_rm)
     monkeypatch.setattr(
-        loop_mod, "_run", lambda coro, timeout="unset": asyncio.run(coro)
+        loop_mod, "_run", lambda coro, timeout="unset", caller=None: asyncio.run(coro)
     )
     monkeypatch.setattr(
         AsyncSSHBackend, "client", lambda self: SimpleNamespace(_aclient=object())
