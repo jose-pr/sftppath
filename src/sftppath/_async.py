@@ -5,7 +5,6 @@ from __future__ import annotations
 import errno as _errno
 import functools as _functools
 import importlib.metadata as _metadata
-import inspect as _inspect
 import io as _io
 import os as _os
 import stat as _stat
@@ -14,13 +13,16 @@ import asyncssh as _asyncssh
 
 try:
     from pathapi import AsyncPath as _AsyncPath
+
+    if not hasattr(_AsyncPath, "_adopt"):
+        raise ImportError("this AsyncPath has no _adopt hook")
 except ImportError as _missing:
     try:
         _installed = _metadata.version("pathapi")
     except _metadata.PackageNotFoundError:
         _installed = "not installed"
     raise ImportError(
-        "AsyncSFTPPath needs pathapi>=0.1.2, which provides AsyncPath "
+        "AsyncSFTPPath needs pathapi>=0.1.2, which provides AsyncPath._adopt "
         f"(found {_installed})",
         name="pathapi",
     ) from _missing
@@ -187,26 +189,13 @@ class AsyncSFTPPath(_AsyncPath):
             )
         super().__init__(path)
 
-    # --- the same class around a derived path --------------------------------
-
-    def _adopt(self, value):
-        if type(value) is _AsyncPath and isinstance(value.path, SFTPPath):
-            return type(self)(value.path)
-        return value
-
-    def __truediv__(self, key):
-        return self._adopt(super().__truediv__(key))
-
-    def __rtruediv__(self, key):
-        return self._adopt(super().__rtruediv__(key))
-
-    @property
-    def parent(self):
-        return self._adopt(super().parent)
-
-    @property
-    def parents(self):
-        return tuple(self._adopt(parent) for parent in super().parents)
+    @classmethod
+    def _adopt(cls, path):
+        # A derived path on another kind of backend cannot be an
+        # `AsyncSFTPPath`, which needs an `AsyncSSHBackend`.
+        if isinstance(path, SFTPPath) and isinstance(path.backend, AsyncSSHBackend):
+            return cls(path)
+        return _AsyncPath(path)
 
     def _child(self, name: str):
         sync = self._path
@@ -638,19 +627,17 @@ class AsyncSFTPPath(_AsyncPath):
             and await self.is_dir()
         )
         if not native:
-            return self._adopt(
-                await _AsyncPath.copy(
-                    self,
-                    target,
-                    overwrite=overwrite,
-                    follow_symlinks=follow_symlinks,
-                    preserve_metadata=preserve_metadata,
-                    recursive=recursive,
-                    ignore_error=ignore_error,
-                    progress=progress,
-                    on_error=on_error,
-                    max_workers=max_workers,
-                )
+            return await _AsyncPath.copy(
+                self,
+                target,
+                overwrite=overwrite,
+                follow_symlinks=follow_symlinks,
+                preserve_metadata=preserve_metadata,
+                recursive=recursive,
+                ignore_error=ignore_error,
+                progress=progress,
+                on_error=on_error,
+                max_workers=max_workers,
             )
         if contains(sync, other):
             raise OSError(
@@ -677,43 +664,3 @@ class AsyncSFTPPath(_AsyncPath):
             aclient=link.aclient,
             **({} if offering is None else {"on_error": offering}),
         )
-
-
-# Every other method and property of `AsyncPath` that gives a path gives an
-# `AsyncSFTPPath` here, so a derived path keeps its backend.
-def _adopting(name: str, member):
-    if isinstance(member, property):
-        return property(lambda self: self._adopt(member.fget(self)), doc=member.__doc__)
-
-    if _inspect.iscoroutinefunction(member):
-
-        async def method(self, *args, **kwargs):
-            return self._adopt(await member(self, *args, **kwargs))
-
-    elif name in ("glob", "rglob"):
-
-        def method(self, *args, **kwargs):
-            return _adopted_listing(self, member(self, *args, **kwargs))
-
-    else:
-
-        def method(self, *args, **kwargs):
-            return self._adopt(member(self, *args, **kwargs))
-
-    return _functools.wraps(member)(method)
-
-
-async def _adopted_listing(owner, listing):
-    try:
-        async for item in listing:
-            yield owner._adopt(item)
-    finally:
-        await listing.aclose()
-
-
-for _name, _member in list(vars(_AsyncPath).items()):
-    if _name.startswith("_") or _name in AsyncSFTPPath.__dict__:
-        continue
-    if callable(_member) or isinstance(_member, property):
-        setattr(AsyncSFTPPath, _name, _adopting(_name, _member))
-del _name, _member

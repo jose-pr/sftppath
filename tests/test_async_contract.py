@@ -1,8 +1,9 @@
 """The shipped `AsyncPathContract` suite against `AsyncSFTPPath`.
 
-The suite wraps its sync `root` with `AsyncPath`; here that name is the native
-class, so every call it makes goes through `AsyncSFTPPath`. The sync `root`
-reaches the same in-process server, which is how each result is compared.
+The suite wraps its sync `root` in `async_path_class`, here the native class, so
+every call it makes goes through `AsyncSFTPPath` and every path it derives must
+be one. The sync `root` reaches the same in-process server, which is how each
+result is compared.
 """
 
 import pathlib
@@ -12,7 +13,6 @@ import pytest
 pytest.importorskip("asyncssh")
 pytest.importorskip("pathapi.path._async", reason="pathapi has no AsyncPath")
 
-import pathapi.testing._async as contract_module  # noqa: E402
 import aio  # noqa: E402
 from pathapi.testing import AsyncPathContract  # noqa: E402
 from sftp_support import make_backend, make_path  # noqa: E402
@@ -20,9 +20,7 @@ from sftppath import AsyncSFTPPath  # noqa: E402
 
 
 class TestAsyncSFTPContract(AsyncPathContract):
-    @pytest.fixture(autouse=True)
-    def _native(self, monkeypatch):
-        monkeypatch.setattr(contract_module, "AsyncPath", AsyncSFTPPath)
+    async_path_class = AsyncSFTPPath
 
     @pytest.fixture
     def root(self, sftp_server, backends):
