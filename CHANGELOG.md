@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Fixed
+## [0.1.1] - 2026-10-16
+
+### Changed
 
 - Reading a directory as a file (`read_bytes()`, `read_text()`, a read of
   `open("rb")`) raises `IsADirectoryError` (`EISDIR`, with the remote path as
@@ -112,5 +114,6 @@ name `pathlib_next`); the old names below are the ones before the move.
 - An error that has a file name and no second one prints only the first; it
   printed `-> None` after it.
 
-[Unreleased]: https://github.com/jose-pr/sftppath/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jose-pr/sftppath/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/jose-pr/sftppath/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jose-pr/sftppath/releases/tag/v0.1.0
