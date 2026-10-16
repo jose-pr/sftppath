@@ -31,8 +31,19 @@ def installed(library: str) -> bool:
     return importlib.util.find_spec(library) is not None
 
 
+def has_async_path() -> bool:
+    """The installed `pathapi` provides `AsyncPath`, which `AsyncSFTPPath` needs."""
+    try:
+        from pathapi import AsyncPath  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def library_missing(name: str) -> bool:
-    """`name` is a backend whose library is not installed."""
+    """`name` is a class whose library, or whose `pathapi`, is not installed."""
+    if name == "AsyncSFTPPath" and not has_async_path():
+        return True
     library = LIBRARY_OF.get(name)
     return library is not None and not installed(library)
 
@@ -45,6 +56,8 @@ def exported(module, name: str) -> bool:
         return hasattr(module, name)
     except ImportError as error:
         library = LIBRARY_OF.get(name)
+        if name == "AsyncSFTPPath" and "pathapi>=0.1.2" in str(error):
+            return name in dir(module)
         return (
             library is not None
             and name in dir(module)

@@ -24,6 +24,10 @@ paramiko or asyncssh, and needs no URI. It builds on
   a keyword, a subclass attribute or `SFTPPATH_BACKEND`.
 - **Native tree operations**: on asyncssh a recursive `copy()` and `rm()` run as
   concurrent requests on one connection, bounded by `max_concurrency`.
+- **From an event loop**: `AsyncSFTPPath` is a `pathapi.AsyncPath` whose stat,
+  listing, walk, file reads and writes, `mkdir`, `unlink`, `rename`, recursive
+  `copy()` and recursive `rm()` are asyncssh requests on your loop, not on a
+  worker thread (it needs `pathapi>=0.1.2`).
 - **ssh_config**: `HostName`, `Port`, `User`, `IdentityFile`, `ProxyCommand` and
   `Include` apply to the host you name; host keys are verified.
 - **Server-side checksums**: `checksum()` uses the `check-file-handle`
@@ -66,6 +70,25 @@ for child in report.parent.iterdir():
     print(child.name, child.stat().st_size)
 ```
 
+**From an event loop**: `AsyncSFTPPath` awaits each request on the running loop;
+`async with` closes its connection:
+
+<!-- example: skip: connects to a server -->
+```python
+import asyncio
+from sftppath import AsyncSFTPPath
+
+async def main():
+    async with AsyncSFTPPath("/srv/data", host="files.example.org", user="deploy") as root:
+        await (root / "out").mkdir(exist_ok=True)
+        await (root / "out" / "n.txt").write_text("1")
+        async for child in root.iterdir():
+            print(child.name, (await child.stat()).st_size)
+        await root.copy(root.parent / "backup", recursive=True)
+
+asyncio.run(main())
+```
+
 **Share a connection**: a backend is the connections to one server and
 account, and a context manager:
 
@@ -105,7 +128,7 @@ print(URIPath("sftp://deploy@files.example.org/srv/data/report.txt").read_text()
 
 | Module | Purpose |
 | --- | --- |
-| `sftppath` | `SFTPPath`, the backends `SFTPBackend`, `AsyncSSHBackend`, `BaseSFTPBackend` and `CheckFileSFTPBackend`, `SFTPEndpoint`, `DEFAULT_PORT`, `DEFAULT_SSH_CONFIG`, the errors and `__version__` |
+| `sftppath` | `SFTPPath`, `AsyncSFTPPath`, the backends `SFTPBackend`, `AsyncSSHBackend`, `BaseSFTPBackend` and `CheckFileSFTPBackend`, `SFTPEndpoint`, `DEFAULT_PORT`, `DEFAULT_SSH_CONFIG`, the errors and `__version__` |
 | `sftppath.exceptions` | `SFTPPathError`, `SFTPAuthenticationError` and `SFTPHostKeyError` |
 | `sftppath.uri` | `SFTPURIPath` and `SFTPURIBackend`, the `sftp:` scheme of `uripath` (needs the `uri` extra) |
 

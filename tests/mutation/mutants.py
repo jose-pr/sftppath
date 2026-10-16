@@ -341,7 +341,7 @@ mutant(
     "sftp-path-rm-always-passes-max-workers",
     "_path.py",
     '                follow_binds=follow_binds,\n                # Only when given: pathapi 0.1.1 has no such keyword.\n                **({} if max_workers is None else {"max_workers": max_workers}),\n',
-    '                follow_binds=follow_binds,\n                max_workers=max_workers,\n',
+    "                follow_binds=follow_binds,\n                max_workers=max_workers,\n",
     "tests/test_sftp.py::test_the_generic_walks_get_max_workers_only_when_it_is_given",
     "rm() hands pathapi a max_workers it was not given, which a release without the keyword refuses",
 )
@@ -350,7 +350,7 @@ mutant(
     "sftp-path-copy-always-passes-max-workers",
     "_path.py",
     '                **extra,\n                **({} if max_workers is None else {"max_workers": max_workers}),\n',
-    '                **extra,\n                max_workers=max_workers,\n',
+    "                **extra,\n                max_workers=max_workers,\n",
     "tests/test_sftp.py::test_the_generic_walks_get_max_workers_only_when_it_is_given",
     "copy() hands pathapi a max_workers it was not given, which a release without the keyword refuses",
 )
@@ -359,7 +359,7 @@ mutant(
     "sftp-uri-rm-always-passes-max-workers",
     "uri.py",
     '            follow_binds=follow_binds,\n            # Only when given: pathapi 0.1.1 has no such keyword.\n            **({} if max_workers is None else {"max_workers": max_workers}),\n',
-    '            follow_binds=follow_binds,\n            max_workers=max_workers,\n',
+    "            follow_binds=follow_binds,\n            max_workers=max_workers,\n",
     "tests/test_uri_scheme.py::test_the_generic_walks_get_max_workers_only_when_it_is_given",
     "the URI rm() hands pathapi a max_workers it was not given",
 )
@@ -371,4 +371,96 @@ mutant(
     '                **({} if offering is None else {"on_error": offering}),\n                max_workers=max_workers,\n',
     "tests/test_uri_scheme.py::test_the_generic_walks_get_max_workers_only_when_it_is_given",
     "the URI copy() hands pathapi a max_workers it was not given",
+)
+
+# --- AsyncSFTPPath ---------------------------------------------------------------
+
+mutant(
+    "sftp-async-listing-keeps-unsafe-names",
+    "_async.py",
+    "            if is_safe_child_name(name):\n                yield self._child(name)\n",
+    "            if True:\n                yield self._child(name)\n",
+    "tests/test_async_sftp.py::test_a_hostile_listing_name_never_becomes_a_child",
+    "AsyncSFTPPath.iterdir() yields a name the server chose that is not one component",
+)
+
+mutant(
+    "sftp-async-walk-keeps-unsafe-names",
+    "_async.py",
+    "                if not is_safe_child_name(name):\n                    if on_error is not None:\n",
+    "                if False:\n                    if on_error is not None:\n",
+    "tests/test_async_sftp.py::test_a_hostile_listing_name_never_becomes_a_child",
+    "AsyncSFTPPath.walk() descends into a hostile listed name",
+)
+
+mutant(
+    "sftp-async-walk-trusts-a-typeless-listing",
+    "_async.py",
+    "                    if listed is None or follow_symlinks:\n",
+    "                    if follow_symlinks:\n",
+    "tests/test_async_sftp.py::test_a_listed_entry_that_does_not_say_what_it_is_is_asked_about",
+    "AsyncSFTPPath.walk() takes an entry whose listing carries no type for a file",
+)
+
+mutant(
+    "sftp-async-exclusive-open-hides-the-existing-file",
+    "_async.py",
+    '                "x" in mode\n                and not self._path._unreachable(error)\n',
+    "                False\n                and not self._path._unreachable(error)\n",
+    "tests/test_async_sftp.py::test_an_exclusive_open_of_an_existing_file_is_a_file_exists_error",
+    "AsyncSFTPPath.open('x') of an existing file raises the bare failure of SFTPv3",
+)
+
+mutant(
+    "sftp-async-unlink-of-a-directory-keeps-the-bare-failure",
+    "_async.py",
+    "        if found is None or not found.is_dir():\n            return None\n        return IsADirectoryError(",
+    "        if True:\n            return None\n        return IsADirectoryError(",
+    "tests/test_async_sftp.py::test_a_bare_failure_is_told_apart_by_asking_about_the_entry",
+    "AsyncSFTPPath.unlink() of a directory is not IsADirectoryError",
+)
+
+mutant(
+    "sftp-async-rename-onto-another-server",
+    "_async.py",
+    "            if not isinstance(target, SFTPPath) or not sync._same_filesystem(target):\n",
+    "            if not isinstance(target, SFTPPath):\n",
+    "tests/test_async_sftp.py::test_rename_replaces_a_file_and_refuses_another_server",
+    "AsyncSFTPPath.rename() sends another server's path to this one",
+)
+
+mutant(
+    "sftp-async-copy-into-itself",
+    "_async.py",
+    "        if contains(sync, other):\n",
+    "        if False:\n",
+    "tests/test_async_sftp.py::test_a_copy_into_itself_is_refused_before_anything_is_created",
+    "AsyncSFTPPath.copy(recursive=True) of a directory into itself is attempted",
+)
+
+mutant(
+    "sftp-async-text-file-skips-its-last-write",
+    "_asyncssh/_aiofile.py",
+    '            if self._kind == "w":\n                await self._drain()\n        finally:\n',
+    "            if False:\n                await self._drain()\n        finally:\n",
+    "tests/test_async_sftp.py::test_a_text_file_sends_nothing_until_it_is_flushed_or_closed",
+    "an AsyncSFTPPath text file closed with text still buffered loses it",
+)
+
+mutant(
+    "sftp-async-close-stops-when-cancelled",
+    "_asyncssh/_aiofile.py",
+    "            await _complete(self._finish())\n",
+    "            await self._finish()\n",
+    "tests/test_async_sftp.py::test_a_cancelled_close_is_complete_before_the_cancellation_arrives",
+    "a cancelled AsyncSFTPPath file close leaves the server's handle open",
+)
+
+mutant(
+    "sftp-async-dead-connection-is-reused",
+    "_asyncssh/_session.py",
+    "        entry = slot.entry\n        if entry is not None and _entry_is_alive(entry):\n            return _Link(entry.client._aclient, entry.client)\n        if slot.lock is None:\n",
+    "        entry = slot.entry\n        if entry is not None:\n            return _Link(entry.client._aclient, entry.client)\n        if slot.lock is None:\n",
+    "tests/test_async_sftp.py::test_a_connection_that_dropped_is_replaced",
+    "AsyncSFTPPath keeps using a connection the server closed",
 )

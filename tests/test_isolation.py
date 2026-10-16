@@ -55,7 +55,11 @@ def test_without_either_ssh_library_names_are_listed_and_a_request_names_both_ex
         import sftppath
         from sftppath import SFTPPath
 
-        backends = {"SFTPBackend": "paramiko", "AsyncSSHBackend": "asyncssh"}
+        backends = {
+            "SFTPBackend": "paramiko",
+            "AsyncSSHBackend": "asyncssh",
+            "AsyncSFTPPath": "asyncssh",
+        }
         for name in sftppath.__all__:
             assert name in dir(sftppath), name
             if name not in backends:

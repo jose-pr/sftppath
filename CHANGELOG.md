@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`AsyncSFTPPath`**, a `pathapi.AsyncPath` for an SFTP server whose requests are
+  made on the caller's event loop with asyncssh, not on a worker thread: `stat()`,
+  `lstat()`, `exists()`, `is_dir()`, `is_file()`, `iterdir()`, `walk()`, `open()`,
+  `read_*()`, `write_*()`, `mkdir()`, `unlink()`, `rmdir()`, `rename()`, and the
+  recursive `copy()` and `rm()` of a directory on one server. The other methods,
+  `glob()` among them, run on worker threads as `AsyncPath` runs them. It is
+  built like `SFTPPath` or from one, opens its connection on first use, and
+  closes it on `aclose()` or `async with`. It needs the `asyncssh` extra and a
+  `pathapi` that provides `AsyncPath` (`pathapi>=0.1.2`); without them
+  `import sftppath` still works and naming the class raises an `ImportError`
+  that says what is missing.
 - **`rm()` and `copy()` take `max_workers`**, the keyword of `pathapi`'s recursive
   `rm()` and `copy()` (a class runs serially unless it declares `_threadsafe`,
   which these classes do not). The generic walks pass it on; the asyncssh native

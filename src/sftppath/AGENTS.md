@@ -6,20 +6,22 @@ without reading its source. It ships inside the package and is
 self-contained. Development documentation lives with the source at
 <https://github.com/jose-pr/sftppath>.
 
-Names are imported from `sftppath` (the path and the backends), from
+Names are imported from `sftppath` (the paths and the backends), from
 `sftppath.exceptions` (the errors, also exported from the root) and from
 `sftppath.uri` (the `sftp:` scheme of `uripath`); a module whose name starts
 with an underscore is private. `import sftppath` imports neither SSH library
-nor `uripath`: `SFTPBackend` and `AsyncSSHBackend` are loaded the first time
-they are named, and naming one whose library is not installed raises an
-`ImportError` naming its extra.
+nor `uripath`: `SFTPBackend`, `AsyncSSHBackend` and `AsyncSFTPPath` are loaded the
+first time they are named, and naming one whose library is not installed raises
+an `ImportError` naming its extra.
 
 `pip install "sftppath[paramiko]"` or `"sftppath[asyncssh]"` installs an SSH
 library; with neither, a path can still be built, named, joined and compared
 (its endpoint keywords are not checked), and its first request raises an
 `ImportError` naming both extras. `[uri]` adds `uripath` and with it the `sftp:`
 scheme, `[all]` is the three together. The one required dependency is
-`pathapi>=0.1.0,<0.2`. The root's `__version__` is the version of the
+`pathapi>=0.1.0,<0.2` (`AsyncSFTPPath` needs `pathapi>=0.1.2`, which provides
+`AsyncPath`, and says so in an `ImportError` when the installed one does not).
+The root's `__version__` is the version of the
 installed distribution.
 
 ## SFTP paths (`sftppath`)
@@ -182,6 +184,102 @@ request does.
   `max_workers=None` (`pathapi`'s keyword, passed on to the generic walks only
   when given; the native walks ignore it and a path never declares
   `_threadsafe`).
+
+### `AsyncSFTPPath`
+
+```python
+class AsyncSFTPPath(AsyncPath):
+    def __init__(
+        self, *segments, backend=None, host=None, port=None, user=None,
+        password=None, ssh_config=..., timeout=..., connect_opts=None, **options,
+    ) -> None: ...
+    async def aclose(self) -> None: ...
+    async def stat(self, *, follow_symlinks=True): ...
+    async def lstat(self): ...
+    async def exists(self, *, follow_symlinks=True): ...
+    async def is_dir(self, *, follow_symlinks=True): ...
+    async def is_file(self, *, follow_symlinks=True): ...
+    def iterdir(self): ...
+    def walk(self, top_down=True, on_error=None, follow_symlinks=False): ...
+    def open(
+        self, mode="r", buffering=-1, encoding=None, errors=None, newline=None,
+    ): ...
+    async def read_bytes(self) -> bytes: ...
+    async def read_text(self, encoding=None, errors=None, newline=None) -> str: ...
+    async def write_bytes(self, data): ...
+    async def write_text(self, data, encoding=None, errors=None, newline=None): ...
+    async def mkdir(self, mode=0o777, parents=False, exist_ok=False): ...
+    async def unlink(self, missing_ok=False): ...
+    async def rmdir(self): ...
+    async def rename(self, target) -> AsyncSFTPPath: ...
+    async def rm(
+        self, recursive=False, missing_ok=False, ignore_error=False, *,
+        follow_symlinks=False, follow_binds=False, max_workers=None,
+    ): ...
+    async def copy(
+        self, target, *, overwrite=False, follow_symlinks=True,
+        preserve_metadata=True, recursive=False, ignore_error=None,
+        progress=None, on_error=None, max_workers=None,
+    ): ...
+```
+
+A `pathapi.AsyncPath` (see its header) for an SFTP server whose requests are
+made on the running event loop with asyncssh, not on a worker thread. It needs
+the `asyncssh` extra and `pathapi>=0.1.2`; `import sftppath` works without
+either, and naming `AsyncSFTPPath` then raises an `ImportError` that says which
+is missing.
+
+- **Construction** is that of `SFTPPath` (`AsyncSFTPPath("/srv/x", host="h",
+  user="u")`, or `backend=`), and `AsyncSFTPPath(sftp_path)` wraps a path. The
+  backend must be an `AsyncSSHBackend` (the endpoint keywords build one whatever
+  `SFTPPATH_BACKEND` says); a path on another backend is a `TypeError`, and
+  `AsyncPath(sftp_path)` is the generic form for it. `path` is the `SFTPPath`
+  it keeps for the pure members and for the methods it does not implement
+  natively; those are `AsyncPath`'s worker-thread coroutines over the
+  backend's own connections. Every derived path (`/`, `parent`, `with_*()`,
+  `resolve()`, ...) is an `AsyncSFTPPath` on the same backend.
+- **Native methods** run on the caller's loop, with no worker thread:
+  `stat()`, `lstat()`, `exists()`, `is_dir()`, `is_file()`, `iterdir()`,
+  `walk()`, `open()`, `read_bytes()`, `read_text()`, `write_bytes()`,
+  `write_text()`, `mkdir()`, `unlink()`, `rmdir()`, `rename()` and, as below,
+  `rm()` and `copy()`. They return and raise what the sync `SFTPPath` does (the
+  same `OSError` classes, `errno` and `filename`, also for a directory read or
+  unlinked as a file and a file listed as a directory). Everything else
+  (`glob()`, `rglob()`, `replace()`, `move()`, `chmod()`, `symlink_to()`,
+  `readlink()`, `touch()`, `checksum()`, ...) is `AsyncPath`'s.
+- **The connection** is opened by the first request, belongs to the backend
+  and to the loop that made the request (another loop, or another thread's,
+  opens its own), and is shared by every path with that backend. Nothing is
+  opened when a path is built. `aclose()` closes the one on the running loop
+  and is harmless when none is open; the next request opens another, and
+  `async with path:` calls it on exit. A connection never closed is closed when
+  its loop cancels its tasks on the way out (`asyncio.run()` does); the sync
+  connections of `path.backend` are not touched by it. A request has no time
+  bound of its own (`timeout=` bounds the sync client): use `asyncio.timeout()`
+  or `asyncio.wait_for()`. A connection the server dropped is replaced by the
+  next request.
+- **`iterdir()` and `walk()`** return async generators of `AsyncSFTPPath`
+  (`walk()` yields `(AsyncSFTPPath, dirnames, filenames)`, one request per
+  directory, `dirnames` open to pruning as in the sync walk). The listing is
+  made at the first step, so a missing directory raises there. `walk()` calls
+  `on_error` on the loop.
+- **`open()`** returns an object that is awaited or used with `async with` and
+  gives an `AsyncFile` whose requests are made on the loop (`file` is the
+  asyncssh file). A binary file reads and writes with one request per call and
+  `readline()` reads ahead 64 KiB; `buffering` is accepted and not used. A text
+  file opened for reading loads the file at its first read; one opened for
+  writing sends what it holds when 64 KiB are buffered, on `flush()` and when
+  it is closed. `"r+"`, `"w+"`, `"a+"` and `"x+"` in text mode give the
+  worker-thread file of `AsyncPath`. The mode, encoding and newline are
+  checked as `open()` checks them. `aclose()` finishes even when the awaiting
+  task is cancelled.
+- **`rm(recursive=True)`** (with `follow_symlinks=False`) and
+  **`copy(recursive=True)`** of a directory to a path of the same server run the
+  concurrent requests of `AsyncSSHBackend` on the loop, bounded by
+  `backend.max_concurrency`; `max_workers` and `progress` are not used.
+  `ignore_error`, `on_error` and the fallback copy of a link or special file
+  run on worker threads, like every callback of `AsyncPath`. Any other `rm()`
+  or `copy()` is `AsyncPath`'s.
 
 ### `SFTPBackend`, `AsyncSSHBackend`, `BaseSFTPBackend`
 

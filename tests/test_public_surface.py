@@ -23,6 +23,7 @@ HEADER = PACKAGE / "AGENTS.md"
 # The names the shipped header documents, by the module they are imported from.
 DOCUMENTED = {
     "sftppath": {
+        "AsyncSFTPPath",
         "AsyncSSHBackend",
         "BaseSFTPBackend",
         "CheckFileSFTPBackend",

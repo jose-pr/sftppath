@@ -20,10 +20,12 @@ from ._version import __version__
 from .exceptions import SFTPAuthenticationError, SFTPHostKeyError, SFTPPathError
 
 if _ty.TYPE_CHECKING:
+    from ._async import AsyncSFTPPath as AsyncSFTPPath
     from ._asyncssh import AsyncSSHBackend as AsyncSSHBackend
     from ._paramiko import SFTPBackend as SFTPBackend
 
 __all__ = [
+    "AsyncSFTPPath",
     "AsyncSSHBackend",
     "BaseSFTPBackend",
     "CheckFileSFTPBackend",
@@ -41,6 +43,7 @@ __all__ = [
 #: Public name -> (the private module that defines it, imported on first use;
 #: the library and extra it needs).
 _LAZY = {
+    "AsyncSFTPPath": ("._async", "asyncssh"),
     "AsyncSSHBackend": ("._asyncssh", "asyncssh"),
     "SFTPBackend": ("._paramiko", "paramiko"),
 }

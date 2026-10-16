@@ -12,6 +12,8 @@
         - DEFAULT_PORT
         - DEFAULT_SSH_CONFIG
 
+::: sftppath.AsyncSFTPPath
+
 ::: sftppath.SFTPBackend
 
 ::: sftppath.AsyncSSHBackend
