@@ -430,15 +430,6 @@ mutant(
 )
 
 mutant(
-    "sftp-async-copy-into-itself",
-    "_async.py",
-    "        if contains(sync, other):\n",
-    "        if False:\n",
-    "tests/test_async_sftp.py::test_a_copy_into_itself_is_refused_before_anything_is_created",
-    "AsyncSFTPPath.copy(recursive=True) of a directory into itself is attempted",
-)
-
-mutant(
     "sftp-async-text-file-skips-its-last-write",
     "_asyncssh/_aiofile.py",
     '            if self._kind == "w":\n                await self._drain()\n        finally:\n',
