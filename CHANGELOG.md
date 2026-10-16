@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Reading a directory as a file (`read_bytes()`, `read_text()`, a read of
+  `open("rb")`) raises `IsADirectoryError` (`EISDIR`, with the remote path as
+  `filename`) against servers that open a directory for reading, as OpenSSH
+  does, on both backends. Against OpenSSH for Windows an unsized read returned
+  `b""` (`""` in text mode); against OpenSSH on Linux, and for a sized read on
+  Windows, it raised an `OSError("Failure")` with no `errno`. `open()` itself
+  still succeeds on those servers. Code that caught the bare `OSError` still
+  catches it; code that read a directory and got empty content now gets the
+  error.
+
 ## [0.1.0] - 2026-10-14
 
 The first release of `sftppath`: the SFTP support of `pathlib-next` 0.9.14

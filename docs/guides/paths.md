@@ -56,7 +56,9 @@ A failed request is the `OSError` pathlib raises for it, with `errno` and
 `filename`; a lost connection is `ConnectionResetError`, a timeout
 `TimeoutError`, a refused login `SFTPAuthenticationError` (a `PermissionError`)
 and an unknown or changed host key `SFTPHostKeyError` (a `ConnectionError`).
-Nothing of paramiko or asyncssh crosses the API. The library's own message is
+Reading a directory is `IsADirectoryError` on every server; where the server
+opens a directory for reading, as OpenSSH does, `open()` succeeds and the
+first read raises it. Nothing of paramiko or asyncssh crosses the API. The library's own message is
 logged at DEBUG on the logger `sftppath`.
 
 ## Checksums and links
