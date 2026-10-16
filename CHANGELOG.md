@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   walks ignore it and stay bounded by `max_concurrency`. Nothing changes for a
   call that does not give it, and it works with the `pathapi` release that
   lacks it as long as it is not given.
+- **`AsyncSSHBackend.over_connection(connection, loop, *, host=None,
+  max_concurrency=None, sftp_version=4, timeout=60.0)`** builds a backend
+  that runs SFTP over an `asyncssh.SSHClientConnection` your program already
+  opened and authenticated, on the event loop that connection is bound to,
+  instead of connecting and logging in a second time. Paths and the `sftp:`
+  scheme work on it unchanged. The connection stays yours: `close()` closes
+  only the backend's SFTP channel, and once the connection is closed every
+  request raises `ConnectionResetError`. Keep `loop` running while the
+  backend is used (a request on a stopped loop raises `RuntimeError`), and
+  build a new backend after `fork()`. Such a backend cannot be pickled.
 
 ## [0.1.1] - 2026-10-16
 

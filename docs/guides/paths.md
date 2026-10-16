@@ -50,6 +50,37 @@ Host keys are verified. paramiko reads `~/.ssh/known_hosts` and the
 Both raise `SFTPHostKeyError` and send no credential. Turning verification off
 (`known_hosts=None`) sends the password to whoever answers.
 
+### A connection you already hold
+
+A program that drives asyncssh itself can run its paths over the connection it
+already opened, with no second login, on the event loop that owns it:
+
+```python
+import asyncio
+import threading
+
+import asyncssh
+
+from sftppath import AsyncSSHBackend, SFTPPath
+
+loop = asyncio.new_event_loop()
+threading.Thread(target=loop.run_forever, daemon=True).start()
+connection = asyncio.run_coroutine_threadsafe(
+    asyncssh.connect("files.example", username="u"), loop
+).result()
+
+with AsyncSSHBackend.over_connection(connection, loop) as backend:
+    print(SFTPPath("/srv/x", backend=backend).read_text())
+```
+
+The backend opens an SFTP channel on the connection at the first request and
+runs every request on `loop`, which must keep running while the backend is
+used. The connection stays yours: `close()` closes only the backend's channel,
+and once you close the connection every request raises
+`ConnectionResetError`. Call the paths from any thread but the one running
+`loop` (a call there raises `RuntimeError` rather than deadlock it). After
+`fork()`, build a new backend over a connection the child opened.
+
 ## Errors
 
 A failed request is the `OSError` pathlib raises for it, with `errno` and

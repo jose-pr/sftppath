@@ -24,6 +24,9 @@ paramiko or asyncssh, and needs no URI. It builds on
   a keyword, a subclass attribute or `SFTPPATH_BACKEND`.
 - **Native tree operations**: on asyncssh a recursive `copy()` and `rm()` run as
   concurrent requests on one connection, bounded by `max_concurrency`.
+- **Your own connection**: `AsyncSSHBackend.over_connection(connection, loop)`
+  runs SFTP over an asyncssh connection your program already opened, on the
+  event loop that owns it, without logging in again.
 - **ssh_config**: `HostName`, `Port`, `User`, `IdentityFile`, `ProxyCommand` and
   `Include` apply to the host you name; host keys are verified.
 - **Server-side checksums**: `checksum()` uses the `check-file-handle`
