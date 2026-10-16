@@ -13,7 +13,9 @@ python benchmarks/bench.py --help     # options and suites; runs nothing
 ```
 
 A suite name after the options runs part of the matrix: `sftp-batch`,
-`sftp-recursive`, `sftp-recursive-copy` or `sftp-recursive-large`.
+`sftp-recursive`, `sftp-recursive-copy`, `sftp-recursive-large` or `sftp-async`
+(`AsyncPath(SFTPPath(...))` against `AsyncSFTPPath`, which the default run also
+includes).
 
 ## Saved Results
 

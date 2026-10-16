@@ -47,6 +47,11 @@ URI_GROUP = "sftp-uri"
 
 BACKENDS = ("paramiko", "asyncssh")
 
+#: The group of the event-loop rows: an `AsyncPath` over an `SFTPPath` (each call
+#: on a worker thread) against the native `AsyncSFTPPath`, both on asyncssh.
+ASYNC_GROUP = "sftp-async"
+ASYNC_FORMS = ("threads", "native")
+
 #: Bound, in seconds, on one asyncssh request. A stalled request fails its case
 #: instead of holding the run.
 ASYNCSSH_TIMEOUT = 3.0
@@ -719,6 +724,163 @@ def benchmark_sftp_backends(mode="all"):
     return SFTPResults(rows[GROUP], rows.get(URI_GROUP), scaling_rows, info, uri_info)
 
 
+class _AsyncTarget:
+    """One form of the event-loop path on a backend of its own: `root` is the
+    server's root as an `AsyncPath` over an `SFTPPath` (`threads`) or an
+    `AsyncSFTPPath` (`native`). The loop stays open for the whole run, so the
+    connection a form opens is kept between samples."""
+
+    def __init__(self, form, server, loop):
+        from pathapi import AsyncPath
+        from sftppath import AsyncSFTPPath, SFTPPath
+
+        cls, options = _backend_class_and_options("asyncssh")
+        self.backend = cls(
+            server.host, server.port, user=USER, password=PASSWORD, **options
+        )
+        sync = SFTPPath("/", backend=self.backend)
+        self.group = ASYNC_GROUP
+        self.name = self.key = form
+        self.local = server.root
+        self.loop = loop
+        self.root = AsyncSFTPPath(sync) if form == "native" else AsyncPath(sync)
+
+    def run(self, awaitable):
+        return self.loop.run_until_complete(awaitable)
+
+    def close(self):
+        try:
+            if self.name == "native":
+                self.run(self.root.aclose())
+        finally:
+            self.backend.close()
+
+
+def _async_walk(target):
+    async def walk():
+        count = 0
+        top = target.root / "bench/recursive_large/source"
+        async for _path, _dirs, files in top.walk():
+            count += len(files)
+        return count
+
+    return lambda: target.run(walk())
+
+
+def _async_read_batch(target):
+    async def read():
+        paths = [target.root / f"bench/listing/file_{i:03d}.txt" for i in range(64)]
+        return await asyncio.gather(*(path.read_bytes() for path in paths))
+
+    return lambda: target.run(read())
+
+
+def _async_copy_tree(target):
+    return _Numbered(
+        lambda n: target.run(
+            (target.root / "bench/recursive_large/source").copy(
+                target.root / f"bench/recursive_large/async_{target.key}_{n:03d}",
+                overwrite=True,
+                recursive=True,
+            )
+        )
+    )
+
+
+def _async_rm_tree(target):
+    def copied(n):
+        return f"bench/recursive_large/async_rm_{target.key}_{n:03d}"
+
+    return _Numbered(
+        lambda n: target.run((target.root / copied(n)).rm(recursive=True)),
+        lambda n: shutil.copytree(
+            target.local / "bench/recursive_large/template", target.local / copied(n)
+        ),
+    )
+
+
+#: (name, make, samples): the cases of the event-loop group. Each tree is 8
+#: directories of 16 small files.
+_ASYNC_CASES = (
+    ("walk of a 128-file tree", _async_walk, 5),
+    ("read_bytes() of 64 files at once", _async_read_batch, 5),
+    ("copy(recursive=True) of a 128-file tree", _async_copy_tree, 3),
+    ("rm(recursive=True) of a 128-file tree", _async_rm_tree, 3),
+)
+
+
+def benchmark_sftp_async():
+    """`AsyncPath(SFTPPath(...))` against `AsyncSFTPPath` on the loopback
+    server: `(rows, info)` with rows `(name, threads, native, threads/native)`,
+    or None rows (the reason recorded) where `pathapi` has no `AsyncPath` or
+    asyncssh is missing."""
+    try:
+        import asyncssh  # noqa: F401
+        from pathapi import AsyncPath  # noqa: F401
+        from sftppath import AsyncSFTPPath  # noqa: F401
+    except ImportError as error:
+        reason = f"{type(error).__name__}: {error}"
+        RECORDER.skip(ASYNC_GROUP, reason, group=ASYNC_GROUP)
+        return None, f"skipped: {reason}"
+    loop = (
+        asyncio.SelectorEventLoop()
+        if sys.platform == "win32"
+        else asyncio.new_event_loop()
+    )
+    rows = []
+    try:
+        with _loopback_sftp_server() as server, contextlib.ExitStack() as stack:
+            _seed(server.root)
+            targets = {}
+            for form in ASYNC_FORMS:
+                target = _AsyncTarget(form, server, loop)
+                stack.callback(target.close)
+                targets[form] = target
+            for name, make, repeat in _ASYNC_CASES:
+                timings = {
+                    form: _measure(
+                        make(target),
+                        repeat=_reps(repeat),
+                        name=f"{ASYNC_GROUP}: {form} {name}",
+                        group=ASYNC_GROUP,
+                        status=True,
+                    )
+                    for form, target in targets.items()
+                }
+                rows.append(
+                    (
+                        name,
+                        timings["threads"],
+                        timings["native"],
+                        _ratio(timings["threads"], timings["native"]),
+                    )
+                )
+    finally:
+        loop.close()
+    return rows, "loopback asyncssh server, median seconds"
+
+
+def print_async_results(rows, info, *, markdown=False):
+    if rows is None:
+        print(f"SFTP async comparison: {info}")
+        return
+    if markdown:
+        for name, threads, native, ratio in rows:
+            print(
+                f"| SFTP async {name} | AsyncPath(SFTPPath): {_fmt_metric(threads)}, "
+                f"AsyncSFTPPath: {_fmt_metric(native)} "
+                f"(threads/native: {_fmt_ratio(ratio)}) |"
+            )
+        return
+    print(f"SFTP async comparison ({info}):")
+    for name, threads, native, ratio in rows:
+        print(
+            f"   - {name}: AsyncPath(SFTPPath)={_fmt_metric(threads)}, "
+            f"AsyncSFTPPath={_fmt_metric(native)} "
+            f"(threads/native={_fmt_ratio(ratio)})"
+        )
+
+
 def print_sftp_results(results, *, markdown=False):
     tables = (
         ("SFTP", "backend comparison", results.rows, results.info),
@@ -766,9 +928,12 @@ def main():
     print("Running benchmarks...")
     results = benchmark_sftp_backends()
     print_sftp_results(results)
+    async_rows, async_info = benchmark_sftp_async()
+    print_async_results(async_rows, async_info)
     # Markdown table format, for copy-pasting.
     print()
     print_sftp_results(results, markdown=True)
+    print_async_results(async_rows, async_info, markdown=True)
 
 
 # --- the saved result --------------------------------------------------------
@@ -867,6 +1032,10 @@ SUITES = {
         "run larger recursive SFTP copy/remove probe rows",
     ),
     "sftp-batch": ("batch", "run only batch SFTP probe rows"),
+    "sftp-async": (
+        "async",
+        "AsyncPath(SFTPPath) against AsyncSFTPPath: walk, batch read, recursive copy and rm",
+    ),
 }
 
 
@@ -923,6 +1092,9 @@ def run_suite(command):
         return
     mode, help_text = SUITES[command]
     print(f"Running {command} ({help_text})...")
+    if mode == "async":
+        print_async_results(*benchmark_sftp_async(), markdown=True)
+        return
     print_sftp_results(benchmark_sftp_backends(mode=mode), markdown=True)
 
 

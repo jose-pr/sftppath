@@ -46,14 +46,20 @@ Without `uripath` the `sftp-uri` group is skipped and the reason is recorded in
 
 | Suite | Runs |
 | --- | --- |
-| (none) | The default suite: warm `stat()`, `iterdir()` of 72 entries, `walk()` and `glob()` of 80 files, `read_bytes()`, `write_bytes()` of 256 KiB, `mkdir()`, `rename()`, `unlink()`, `copy()` of a 256 KiB file, `rm(recursive=True)` of a 9-file tree, and a cold connect + `stat()`. |
+| (none) | The default suite: warm `stat()`, `iterdir()` of 72 entries, `walk()` and `glob()` of 80 files, `read_bytes()`, `write_bytes()` of 256 KiB, `mkdir()`, `rename()`, `unlink()`, `copy()` of a 256 KiB file, `rm(recursive=True)` of a 9-file tree, a cold connect + `stat()`, and the `sftp-async` rows. |
 | `sftp-batch` | `read_bytes()` and `stat()` of 64 files, and `unlink()`. |
 | `sftp-recursive` | `rm(recursive=True)` of a 9-file tree. |
 | `sftp-recursive-copy` | `copy(recursive=True)` of a 4-file tree, and the same copy on asyncssh backends with `max_concurrency` 1 and 4. |
+| `sftp-async` | `AsyncPath(SFTPPath(...))` against `AsyncSFTPPath`, both on asyncssh: a walk of a 128-file tree, `read_bytes()` of 64 files at once, and `copy(recursive=True)` and `rm(recursive=True)` of a 128-file tree. The default suite also runs it. Without `pathapi>=0.1.2` or asyncssh the group is skipped and the reason recorded. |
 | `sftp-recursive-large` | `copy(recursive=True)` and `rm(recursive=True)` of 128-file trees, and the copy on asyncssh backends with `max_concurrency` 1, 4 and 8. |
 
 `SFTPPATH_BENCH_RECURSIVE=1` adds the `sftp-recursive-copy` rows to the default
 suite.
+
+The group `sftp-async` has its own form: each case runs on a backend per form,
+`threads` (`AsyncPath` over an `SFTPPath`, every call on a worker thread) and
+`native` (`AsyncSFTPPath`, on one event loop that stays open for the run), and the
+console shows `threads/native`: above 1, the native path was faster.
 
 Every case runs on a paramiko backend and on an asyncssh backend, against the
 same server and data. The group `sftp` is `SFTPPath("/", backend=...)`; the group
