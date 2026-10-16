@@ -601,7 +601,11 @@ class SFTPPath(TreePath):
         *,
         follow_symlinks=False,
         follow_binds=False,
+        max_workers=None,
     ):
+        """Remove as `Path.rm()` does. `max_workers` is `Path.rm()`'s; the native
+        asyncssh walk (`follow_symlinks=False`) has its own concurrency, bounded
+        by `backend.max_concurrency`, and ignores it."""
         check_follow("follow_symlinks", follow_symlinks)
         check_follow("follow_binds", follow_binds)
         # The native walker unlinks a symlink and never follows one, which is
@@ -618,6 +622,8 @@ class SFTPPath(TreePath):
                 ignore_error=ignore_error,
                 follow_symlinks=follow_symlinks,
                 follow_binds=follow_binds,
+                # Only when given: pathapi 0.1.1 has no such keyword.
+                **({} if max_workers is None else {"max_workers": max_workers}),
             )
 
         on_error = None
@@ -641,6 +647,7 @@ class SFTPPath(TreePath):
         ignore_error=None,
         progress=None,
         on_error=None,
+        max_workers=None,
     ):
         """Copy with concurrent fan-out on the asyncssh backend.
 
@@ -649,7 +656,9 @@ class SFTPPath(TreePath):
         bounded by `backend.max_concurrency` (requests in flight, and files
         open at once); the whole copy has no wall-clock timeout. `progress`
         is honored on the generic single-file path below, but not called
-        during the concurrent native fan-out itself.
+        during the concurrent native fan-out itself. `max_workers` is
+        `Path.copy()`'s and applies to the generic copy only; the native
+        fan-out ignores it.
         `on_error(error, path)` is `Path.copy()`'s predicate; the native
         fan-out calls it from a worker thread, once per failing child.
         """
@@ -678,6 +687,7 @@ class SFTPPath(TreePath):
                 ignore_error=ignore_error,
                 progress=progress,
                 **extra,
+                **({} if max_workers is None else {"max_workers": max_workers}),
             )
 
         return self._copy_tree(

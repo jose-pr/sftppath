@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`rm()` and `copy()` take `max_workers`**, the keyword of `pathapi`'s recursive
+  `rm()` and `copy()` (a class runs serially unless it declares `_threadsafe`,
+  which these classes do not). The generic walks pass it on; the asyncssh native
+  walks ignore it and stay bounded by `max_concurrency`. Nothing changes for a
+  call that does not give it, and it works with the `pathapi` release that
+  lacks it as long as it is not given.
+
 ## [0.1.1] - 2026-10-16
 
 ### Changed

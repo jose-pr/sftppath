@@ -178,7 +178,10 @@ request does.
   otherwise (and for every backend that does not set it) the generic walks of
   `pathapi` run, and no SSH library is imported by `copy()` or `rm()`.
   `progress` is not called during the native fan-out, and the native `rm()`
-  looks only at the root before it lists.
+  looks only at the root before it lists. `rm()` and `copy()` take
+  `max_workers=None` (`pathapi`'s keyword, passed on to the generic walks only
+  when given; the native walks ignore it and a path never declares
+  `_threadsafe`).
 
 ### `SFTPBackend`, `AsyncSSHBackend`, `BaseSFTPBackend`
 

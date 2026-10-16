@@ -1184,6 +1184,46 @@ def test_recursive_copy_to_another_class_or_server_is_not_the_backends_walk(
     assert backend.tree_copy_calls == []
 
 
+def _generic_owner(cls, name):
+    """The class above `cls` whose `name` the override reaches with `super()`."""
+    return next(base for base in cls.__mro__[1:] if name in vars(base))
+
+
+def test_the_backends_own_walks_ignore_max_workers(monkeypatch):
+    monkeypatch.setattr(SFTPPath, "is_dir", lambda self, **kw: True)
+    monkeypatch.setattr(SFTPPath, "exists", lambda self, **kw: True)
+    backend = _CopyBackend()
+
+    _sftp("/root", backend).rm(recursive=True, max_workers=4)
+    _sftp("/src", backend).copy(
+        _sftp("/dst", backend), recursive=True, overwrite=True, max_workers=4
+    )
+
+    assert backend.tree_rm_calls == [("/root", False, None)]
+    assert backend.tree_copy_calls == [("/src", "/dst")]
+
+
+@pytest.mark.parametrize("name", ["rm", "copy"])
+@pytest.mark.parametrize("workers", [None, 4])
+def test_the_generic_walks_get_max_workers_only_when_it_is_given(
+    monkeypatch, name, workers
+):
+    seen = []
+    owner = _generic_owner(SFTPPath, name)
+    monkeypatch.setattr(owner, name, lambda self, *args, **kw: seen.append(kw))
+    path = _sftp("/a")
+    extra = {} if workers is None else {"max_workers": workers}
+
+    if name == "rm":
+        path.rm(**extra)
+    else:
+        path.copy(_sftp("/b"), **extra)
+
+    assert [kw.get("max_workers", "absent") for kw in seen] == [
+        "absent" if workers is None else workers
+    ]
+
+
 def test_rm_that_is_not_recursive_does_not_use_the_backends_walk():
     client = _LinkAndRenameClient({"/f": "file"})
     backend = _TreeBackend()

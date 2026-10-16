@@ -336,3 +336,39 @@ mutant(
     "tests/test_isolation.py::test_without_either_ssh_library_names_are_listed_and_a_request_names_both_extras",
     "naming a backend whose library is missing raises ModuleNotFoundError, not the ImportError that names the extra",
 )
+
+mutant(
+    "sftp-path-rm-always-passes-max-workers",
+    "_path.py",
+    '                follow_binds=follow_binds,\n                # Only when given: pathapi 0.1.1 has no such keyword.\n                **({} if max_workers is None else {"max_workers": max_workers}),\n',
+    '                follow_binds=follow_binds,\n                max_workers=max_workers,\n',
+    "tests/test_sftp.py::test_the_generic_walks_get_max_workers_only_when_it_is_given",
+    "rm() hands pathapi a max_workers it was not given, which a release without the keyword refuses",
+)
+
+mutant(
+    "sftp-path-copy-always-passes-max-workers",
+    "_path.py",
+    '                **extra,\n                **({} if max_workers is None else {"max_workers": max_workers}),\n',
+    '                **extra,\n                max_workers=max_workers,\n',
+    "tests/test_sftp.py::test_the_generic_walks_get_max_workers_only_when_it_is_given",
+    "copy() hands pathapi a max_workers it was not given, which a release without the keyword refuses",
+)
+
+mutant(
+    "sftp-uri-rm-always-passes-max-workers",
+    "uri.py",
+    '            follow_binds=follow_binds,\n            # Only when given: pathapi 0.1.1 has no such keyword.\n            **({} if max_workers is None else {"max_workers": max_workers}),\n',
+    '            follow_binds=follow_binds,\n            max_workers=max_workers,\n',
+    "tests/test_uri_scheme.py::test_the_generic_walks_get_max_workers_only_when_it_is_given",
+    "the URI rm() hands pathapi a max_workers it was not given",
+)
+
+mutant(
+    "sftp-uri-copy-always-passes-max-workers",
+    "uri.py",
+    '                **({} if offering is None else {"on_error": offering}),\n                **({} if max_workers is None else {"max_workers": max_workers}),\n',
+    '                **({} if offering is None else {"on_error": offering}),\n                max_workers=max_workers,\n',
+    "tests/test_uri_scheme.py::test_the_generic_walks_get_max_workers_only_when_it_is_given",
+    "the URI copy() hands pathapi a max_workers it was not given",
+)

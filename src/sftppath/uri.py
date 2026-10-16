@@ -382,7 +382,11 @@ class SFTPURIPath(DelegatingURIPath):
         *,
         follow_symlinks=False,
         follow_binds=False,
+        max_workers=None,
     ):
+        """Remove as `Path.rm()` does. `max_workers` is `Path.rm()`'s; the native
+        asyncssh walk (`follow_symlinks=False`) has its own concurrency, bounded
+        by `backend.max_concurrency`, and ignores it."""
         check_follow("follow_symlinks", follow_symlinks)
         check_follow("follow_binds", follow_binds)
         # The native walker unlinks a symlink and never follows one, which is
@@ -412,6 +416,8 @@ class SFTPURIPath(DelegatingURIPath):
             ignore_error=ignore_error,
             follow_symlinks=follow_symlinks,
             follow_binds=follow_binds,
+            # Only when given: pathapi 0.1.1 has no such keyword.
+            **({} if max_workers is None else {"max_workers": max_workers}),
         )
 
     def copy(
@@ -425,11 +431,13 @@ class SFTPURIPath(DelegatingURIPath):
         ignore_error=None,
         progress=None,
         on_error=None,
+        max_workers=None,
     ):
         """Copy with the backend's concurrent fan-out: a directory copied to a
         path of the same server and tree is done by the native walk of
         `SFTPPath.copy()`; every other copy is `Path.copy()`. `progress` is not
-        called during the native fan-out."""
+        called during the native fan-out, nor is `max_workers` (`Path.copy()`'s)
+        used there: the walk is bounded by `backend.max_concurrency`."""
         offering = copy_error_predicate(ignore_error, on_error)
         # Passed on only when given: a backend or a `copy()` override without
         # the keyword has no parameter for it.
@@ -465,6 +473,7 @@ class SFTPURIPath(DelegatingURIPath):
                 ignore_error=ignore_error,
                 progress=progress,
                 **({} if offering is None else {"on_error": offering}),
+                **({} if max_workers is None else {"max_workers": max_workers}),
             )
         moved = self._core_of(target)
         with self._delegated((str(moved), str(target))):

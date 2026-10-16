@@ -390,15 +390,42 @@ def test_rename_and_hardlink_to_another_host_raise_not_implemented():
         src.hardlink_to(URIPath("sftp://b.invalid/incoming/report.csv"))
 
 
-def test_rm_has_the_signature_of_path_rm():
-    expected = inspect.signature(Path.rm).parameters
-    actual = inspect.signature(SFTPURIPath.rm).parameters
-    assert list(actual) == list(expected)
-    for name, parameter in expected.items():
-        assert actual[name].kind == parameter.kind, name
-        assert actual[name].default == parameter.default, name
-    core = inspect.signature(SFTPPath.rm).parameters
-    assert list(core) == list(expected)
+@pytest.mark.parametrize("name", ["rm", "copy"])
+def test_rm_and_copy_have_the_signature_of_the_path_ones(name):
+    expected = inspect.signature(getattr(Path, name)).parameters
+    for cls in (SFTPURIPath, SFTPPath):
+        actual = inspect.signature(getattr(cls, name)).parameters
+        # `max_workers` is on both sides from the pathapi release that added it.
+        assert [n for n in actual if n != "max_workers"] == [
+            n for n in expected if n != "max_workers"
+        ], cls
+        assert "max_workers" in actual, cls
+        assert actual["max_workers"].kind is inspect.Parameter.KEYWORD_ONLY
+        assert actual["max_workers"].default is None
+        for pname, parameter in expected.items():
+            assert actual[pname].kind == parameter.kind, (cls, pname)
+            assert actual[pname].default == parameter.default, (cls, pname)
+
+
+@pytest.mark.parametrize("name", ["rm", "copy"])
+@pytest.mark.parametrize("workers", [None, 4])
+def test_the_generic_walks_get_max_workers_only_when_it_is_given(
+    monkeypatch, name, workers
+):
+    seen = []
+    owner = next(b for b in SFTPURIPath.__mro__[1:] if name in vars(b))
+    monkeypatch.setattr(owner, name, lambda self, *args, **kw: seen.append(kw))
+    path = URIPath("sftp://host/dir", backend=FakeBackend())
+    extra = {} if workers is None else {"max_workers": workers}
+
+    if name == "rm":
+        path.rm(**extra)
+    else:
+        path.copy(URIPath("sftp://host/other", backend=FakeBackend()), **extra)
+
+    assert [kw.get("max_workers", "absent") for kw in seen] == [
+        "absent" if workers is None else workers
+    ]
 
 
 @pytest.mark.parametrize("keyword", ["follow_symlinks", "follow_binds"])
