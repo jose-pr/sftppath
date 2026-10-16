@@ -50,6 +50,18 @@ Host keys are verified. paramiko reads `~/.ssh/known_hosts` and the
 Both raise `SFTPHostKeyError` and send no credential. Turning verification off
 (`known_hosts=None`) sends the password to whoever answers.
 
+## From an event loop
+
+`AsyncSFTPPath` is a `pathapi.AsyncPath` for a server, with the asyncssh backend:
+`await path.stat()`, `async for child in path.iterdir()`, `async with
+path.open("rb") as file`. Its stat, listing, walk, file reads and writes, `mkdir`,
+`unlink`, `rmdir`, `rename`, recursive `copy()` and recursive `rm()` are requests
+made on your loop (the last two as concurrent requests on one connection,
+bounded by `max_concurrency`); the other methods, `glob()` among them, run on
+worker threads as `AsyncPath` runs them. The connection is opened by the first
+request, belongs to the loop that made it, and is closed by `aclose()` or `async
+with`. It needs `pathapi>=0.1.2` and the `asyncssh` extra.
+
 ## Errors
 
 A failed request is the `OSError` pathlib raises for it, with `errno` and

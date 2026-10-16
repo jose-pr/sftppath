@@ -20,6 +20,7 @@ contract; a behavioral divergence that is not recorded is a bug.
 | `src/sftppath/__init__.py`, `exceptions.py`, `uri.py` | The public modules: the root exports `SFTPPath` and the backends (the two real ones lazily, so `import sftppath` loads no SSH library), `exceptions.py` the errors, `uri.py` the `sftp:` scheme (imports `uripath`; without it the import raises an `ImportError` naming the `uri` extra). |
 | `src/sftppath/_path.py`, `_backend.py` | `SFTPPath` (the protocol logic: requests, error mapping, rename and replace, the native-walk dispatch, on `pathapi.providers.TreePath`) and the backend contract. |
 | `src/sftppath/_paramiko.py`, `_asyncssh/` | The two backends. `_asyncssh/` is a package of private modules: the shared loop (`_loop`), error translation (`_translate`), attributes, file and client wrappers, the connection cache, connecting, the backend and the native recursive walks (`_walk`). |
+| `src/sftppath/_async.py`, `_asyncssh/_session.py`, `_asyncssh/_aiofile.py` | `AsyncSFTPPath` (a `pathapi.AsyncPath`; the module raises an `ImportError` naming `pathapi>=0.1.2` when `AsyncPath` is missing, and `__init__` loads it on first use like the backends), the per-backend, per-loop connection it opens and closes, and its native file. They reuse the connect, error, attribute and recursive-walk code of `_asyncssh/`. |
 | `src/sftppath/_checkfile.py`, `_sshconfig.py`, `_errors.py`, `_select.py`, `_exit.py` | The `check-file-handle` checksums, ssh_config handling and host validation, the error builders, backend selection and the flush of files left open at exit. |
 | `tests/` | The pytest suite. `tests/conftest.py` holds the loopback servers' fixtures, `tests/sftp_loopback.py` the counting SSH server, `tests/sftp_support.py` the helpers that build a backend and a path; `tests/mutation/` is the mutation list; `tests/probes/` are child processes that tests run. |
 | `benchmarks/` | `bench.py` and committed JSON results; see [`benchmarks/README.md`](benchmarks/README.md). Not shipped. |
@@ -89,6 +90,11 @@ python -m pytest -q -rs tests/test_public_surface.py -k "mypy_accepts or pyright
 - A behaviour of a path runs for both classes: the `flavor` fixture is an
   `SFTPPath` and an `SFTPURIPath` (skipped without `uripath`), the `kind` fixture
   is each SSH library.
+- **The async path** is tested by `tests/test_async_sftp.py` (native behaviour,
+  connections, errors, wire counts) and `tests/test_async_contract.py` (the shipped
+  `AsyncPathContract`, run with its `AsyncPath` name rebound to `AsyncSFTPPath`).
+  Both skip where `pathapi` has no `AsyncPath`; run coroutines with
+  `tests/aio.py::run`, which uses the selector loop on Windows.
 - **Typing**: the two typing tests run `mypy` and `pyright` (or `basedpyright`)
   on a consumer script and skip where neither is installed; the `typing` job
   installs them.
