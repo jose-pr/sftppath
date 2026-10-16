@@ -111,7 +111,12 @@ request does.
   `rename()` and `symlink_to()`); an "operation unsupported" status is
   `NotImplementedError`. An error `SFTPPath` builds itself (`mkdir()` of an
   existing path, `rmdir()` or `iterdir()` of the wrong kind of entry) carries
-  the path as `filename`. A connection that goes away, mid-request or
+  the path as `filename`. Reading a directory is `IsADirectoryError`
+  (`EISDIR`) on every server: OpenSSH opens a directory for reading, so there
+  `open()` succeeds and the first read raises it, with the remote path as
+  `filename` for both path classes. A read that fails with no `errno`, or an
+  unsized read that returns nothing, costs one more request (an fstat) to
+  tell; a read that returns data costs none. A connection that goes away, mid-request or
   mid-transfer, is `ConnectionResetError`; a refused login is
   `SFTPAuthenticationError` (a `PermissionError`, `EACCES`); a host key that
   is unknown, changed or refused is `SFTPHostKeyError` (a `ConnectionError`,

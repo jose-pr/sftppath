@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import errno as _errno
 import logging as _logging
+import os as _os
 
 from .exceptions import SFTPAuthenticationError, SFTPHostKeyError
 
@@ -66,6 +67,13 @@ def bare_failure(
     if filename2 is not None:
         result.filename2 = filename2
     return result
+
+
+def is_a_directory(filename: "str | None") -> IsADirectoryError:
+    """What reading a directory as a file raises, as pathlib raises it."""
+    return os_error(
+        IsADirectoryError, _errno.EISDIR, _os.strerror(_errno.EISDIR), filename
+    )
 
 
 def lost() -> ConnectionResetError:

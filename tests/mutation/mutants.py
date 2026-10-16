@@ -192,6 +192,42 @@ mutant(
     "a copy that fails leaves the half-written destination",
 )
 
+mutant(
+    "sftp-asyncssh-failed-read-of-a-directory-stays-bare",
+    "_asyncssh/_file.py",
+    "                and translated.errno is None\n",
+    "                and False\n",
+    "tests/test_sftp_directory_read.py::test_a_sized_read_of_a_directory_is_a_directory_error",
+    "a read of a directory OpenSSH opened raises a bare OSError('Failure') on asyncssh",
+)
+
+mutant(
+    "sftp-asyncssh-empty-read-of-a-directory-is-empty",
+    "_asyncssh/_file.py",
+    "        if size < 0 and not data and self._is_directory():\n",
+    "        if False:\n",
+    "tests/test_sftp_directory_read.py::test_read_bytes_of_a_directory_is_a_directory_error",
+    "read_bytes() of a directory Windows OpenSSH opened returns b'' on asyncssh",
+)
+
+mutant(
+    "sftp-paramiko-failed-read-of-a-directory-stays-bare",
+    "_paramiko.py",
+    "            if error.errno is None and self._is_directory():\n",
+    "            if False:\n",
+    "tests/test_sftp_directory_read.py::test_read_bytes_of_a_directory_is_a_directory_error",
+    "a read of a directory OpenSSH opened raises a bare OSError('Failure') on paramiko",
+)
+
+mutant(
+    "sftp-paramiko-empty-read-of-a-directory-is-empty",
+    "_paramiko.py",
+    "        if (size is None or size < 0) and not data and self._is_directory():\n",
+    "        if False:\n",
+    "tests/test_sftp_directory_read.py::test_a_directory_whose_reads_answer_eof_is_a_directory_error",
+    "read_bytes() of a directory whose reads answer EOF returns b'' on paramiko",
+)
+
 # --- check-file ---------------------------------------------------------------------
 
 mutant(

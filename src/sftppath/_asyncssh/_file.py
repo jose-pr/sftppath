@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import io as _io
+import stat as _stat
 import sys as _sys
 
 import asyncssh as _asyncssh
 
+from .. import _errors
 from . import _loop as _bridge
-from ._attrs import _StatAdapter  # noqa: F401
+from ._attrs import _StatAdapter
 from ._translate import _library_error, _reraise_sftp_errors
 
 
@@ -34,29 +36,57 @@ class _SyncSFTPFile(_io.RawIOBase):
         afile: "_asyncssh.SFTPClientFile",
         timeout: "float | None" = _bridge._UNSET_TIMEOUT,
         mode: str = "r+",
+        filename: "str | None" = None,
     ):
         super().__init__()
         self._afile = afile
         self._timeout = timeout
+        self._filename = filename
         self._readable = "r" in mode or "+" in mode
         self._writable = any(kind in mode for kind in "wxa+")
 
-    # read()/write() carry whole payloads (read_bytes() is one read(-1)), so
-    # their duration grows with the data: no wall-clock bound.
-    @_reraise_sftp_errors
-    def read(self, size: int = -1) -> bytes:
-        return _bridge._run(self._afile.read(size), None)
+    def _read(self, size: int) -> bytes:
+        # read() carries whole payloads (read_bytes() is one read(-1)), so its
+        # duration grows with the data: no wall-clock bound.
+        try:
+            data = _bridge._run(self._afile.read(size), None)
+        except _asyncssh.Error as error:
+            translated = _library_error(error)
+            # OpenSSH opens a directory for reading and fails the read with a
+            # bare failure (SFTPv3 has no EISDIR status).
+            if (
+                isinstance(translated, OSError)
+                and translated.errno is None
+                and self._is_directory()
+            ):
+                raise _errors.is_a_directory(self._filename) from None
+            raise translated from None
+        # An unsized read reads the handle's fstat size, which some servers
+        # (Windows OpenSSH) report as 0 for a directory they opened.
+        if size < 0 and not data and self._is_directory():
+            raise _errors.is_a_directory(self._filename)
+        return data
 
-    @_reraise_sftp_errors
+    def _is_directory(self) -> bool:
+        """Whether the server says this handle is a directory: one fstat,
+        asked only after a read came back empty or failed."""
+        try:
+            attrs = _bridge._run(self._afile.stat(), self._timeout)
+        except (_asyncssh.Error, OSError):
+            return False
+        return _stat.S_ISDIR(_StatAdapter(attrs).st_mode)
+
+    def read(self, size: int = -1) -> bytes:
+        return self._read(-1 if size is None else size)
+
     def readall(self) -> bytes:
         # One request stream to EOF (asyncssh parallelizes it), instead of
         # RawIOBase's loop of DEFAULT_BUFFER_SIZE reads.
-        return _bridge._run(self._afile.read(-1), None)
+        return self._read(-1)
 
-    @_reraise_sftp_errors
     def readinto(self, buffer) -> int:
         view = memoryview(buffer).cast("B")
-        data = _bridge._run(self._afile.read(len(view)), None)
+        data = self._read(len(view))
         view[: len(data)] = data
         return len(data)
 

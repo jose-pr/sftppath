@@ -5,6 +5,7 @@ import functools as _functools
 import io as _io
 import pathlib as _pathlib
 import socket as _socket
+import stat as _stat
 import threading as _thread
 
 import paramiko as _paramiko
@@ -44,8 +45,37 @@ def _text(data: bytes) -> str:
 
 class _SFTPFile(_paramiko.SFTPFile):
     """paramiko's file with the `io` behaviours it lacks: `write()` returns
-    the number of bytes accepted, `truncate()` takes no size and flushes, and
-    `fileno()` says it has none."""
+    the number of bytes accepted, `truncate()` takes no size and flushes,
+    `fileno()` says it has none, and reading a directory the server opened
+    raises `IsADirectoryError`."""
+
+    #: The wire path `_SFTPClient.open()` opened, for the errors a read raises.
+    _filename = None
+
+    def _read(self, size):
+        try:
+            return super()._read(size)
+        except OSError as error:
+            # OpenSSH opens a directory for reading and fails the read with a
+            # bare failure (SFTPv3 has no EISDIR status).
+            if error.errno is None and self._is_directory():
+                raise _errors.is_a_directory(self._filename) from None
+            raise
+
+    def read(self, size=None):
+        data = super().read(size)
+        # A server that answers a read of a directory with EOF.
+        if (size is None or size < 0) and not data and self._is_directory():
+            raise _errors.is_a_directory(self._filename)
+        return data
+
+    def _is_directory(self):
+        """Whether the server says this handle is a directory: one fstat,
+        asked only after a read came back empty or failed."""
+        try:
+            return _stat.S_ISDIR(self.stat().st_mode or 0)
+        except (OSError, EOFError, _paramiko.SSHException):
+            return False
 
     def write(self, data):
         count = (
@@ -180,8 +210,9 @@ class _SFTPClient(_paramiko.SFTPClient):
 
     def open(self, filename, mode="r", bufsize=-1):
         file = super().open(filename, mode, bufsize)
-        # The same attributes and slots: only `write()` and `fileno()` differ.
+        # The same attributes and slots: only methods differ.
         file.__class__ = _SFTPFile
+        file._filename = filename if isinstance(filename, str) else _text(filename)
         return file
 
 

@@ -97,7 +97,7 @@ class _SyncSFTPClient:
         # asyncio.run_coroutine_threadsafe() rejects; `_aopen` wraps the `await` in a
         # real coroutine.
         afile = self._run(_aopen(self._aclient, path, mode))
-        raw = _SyncSFTPFile(afile, self._timeout, mode)
+        raw = _SyncSFTPFile(afile, self._timeout, mode, path)
         if buffering == 0:
             return raw
         # Buffered like paramiko's files and a local open(): a raw handle
