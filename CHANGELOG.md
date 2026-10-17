@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-17
+
+### Changed
+
+- **`sftppath` requires `pathapi>=0.1.2,<0.2`** (it allowed `>=0.1.0`): 0.1.2
+  provides `AsyncPath`, which `AsyncSFTPPath` builds on. Upgrading `sftppath` upgrades
+  `pathapi` with it.
+
 ### Added
 
 - **`AsyncSFTPPath`**, a `pathapi.AsyncPath` for an SFTP server whose requests are
@@ -134,6 +142,7 @@ name `pathlib_next`); the old names below are the ones before the move.
 - An error that has a file name and no second one prints only the first; it
   printed `-> None` after it.
 
-[Unreleased]: https://github.com/jose-pr/sftppath/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/jose-pr/sftppath/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/jose-pr/sftppath/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/jose-pr/sftppath/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jose-pr/sftppath/releases/tag/v0.1.0

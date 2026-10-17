@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sftppath"
-version = "0.1.1"
+version = "0.1.2"
 authors = [{ name = "Jose A" }]
 description = "pathlib-style paths for SFTP servers, on paramiko or asyncssh, and the sftp: scheme for uripath"
 readme = "README.md"
@@ -28,7 +28,8 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "pathapi>=0.1.0,<0.2",
+    # 0.1.2 added AsyncPath and its _adopt hook, which AsyncSFTPPath builds on.
+    "pathapi>=0.1.2,<0.2",
 ]
 
 [project.optional-dependencies]

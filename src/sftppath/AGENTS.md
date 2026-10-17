@@ -19,8 +19,8 @@ library; with neither, a path can still be built, named, joined and compared
 (its endpoint keywords are not checked), and its first request raises an
 `ImportError` naming both extras. `[uri]` adds `uripath` and with it the `sftp:`
 scheme, `[all]` is the three together. The one required dependency is
-`pathapi>=0.1.0,<0.2` (`AsyncSFTPPath` needs `pathapi>=0.1.2`, which provides
-`AsyncPath`, and says so in an `ImportError` when the installed one does not).
+`pathapi>=0.1.2,<0.2` (0.1.2 provides `AsyncPath`, which `AsyncSFTPPath` builds
+on).
 The root's `__version__` is the version of the
 installed distribution.
 
