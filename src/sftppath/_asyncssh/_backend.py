@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio as _asyncio
 import typing as _ty
 
 import asyncssh as _asyncssh
 
-from .. import _checkfile
+from .. import _checkfile, _errors
 from .._backend import SFTPEndpoint
 from .._sshconfig import DEFAULT_SSH_CONFIG
 from . import _loop as _bridge
 from ._cache import _CACHE
 from ._client import _SyncSFTPClient
-from ._connect import _aconnect
+from ._connect import _aconnect, _aopen_on
 from ._translate import _transport_error
 from ._walk import _concurrent_copy, _concurrent_rm
 
@@ -50,7 +51,11 @@ class AsyncSSHBackend(_checkfile.CheckFileSFTPBackend):
     (the server hashes the whole file) have no wall-clock bound; asyncssh's own
     `connect_timeout`, `login_timeout` and `keepalive_interval` connect options
     detect a dead peer there. `timeout=None` disables the per-request bound
-    too."""
+    too.
+
+    `over_connection(connection, loop)` builds one that runs SFTP over an
+    asyncssh connection the caller has already opened, on the loop that owns
+    it, instead of connecting itself."""
 
     __slots__ = (
         "host",
@@ -61,6 +66,8 @@ class AsyncSSHBackend(_checkfile.CheckFileSFTPBackend):
         "max_concurrency",
         "sftp_version",
         "timeout",
+        "_connection",
+        "_caller",
     )
 
     #: asyncssh's chmod() takes follow_symlinks natively.
@@ -107,6 +114,80 @@ class AsyncSSHBackend(_checkfile.CheckFileSFTPBackend):
         self.max_concurrency = max_concurrency
         self.sftp_version = sftp_version
         self.timeout = timeout
+        self._connection: "_asyncssh.SSHClientConnection | None" = None
+        self._caller: "_bridge._CallerLoop | None" = None
+
+    @classmethod
+    def over_connection(
+        cls,
+        connection: "_asyncssh.SSHClientConnection",
+        loop: "_asyncio.AbstractEventLoop",
+        *,
+        host: "str | None" = None,
+        max_concurrency: "int | None" = None,
+        sftp_version: int = 4,
+        timeout: "float | None" = _bridge._DEFAULT_TIMEOUT,
+    ) -> "AsyncSSHBackend":
+        """A backend that opens its SFTP channel on `connection`, an
+        authenticated asyncssh client connection the caller opened, and runs
+        every request on `loop`, the running event loop `connection` is bound
+        to, instead of on this package's own loop thread. Nothing is sent
+        until the first request; no second login is made.
+
+        The connection stays the caller's: `close()` closes only the SFTP
+        channel the backend opened (the next request opens another on the
+        same connection), and the backend never closes the connection. Once
+        the connection is closed, every request raises
+        `ConnectionResetError`. `loop` must keep running while the backend
+        is used; a request made while it is closed or stopped, or that is
+        waiting when it stops, raises `RuntimeError`, as does a request made
+        on the thread running `loop` (it would deadlock it) and any use in a
+        `fork()`ed child. Such a backend cannot be pickled (`TypeError`).
+
+        `host` names the server in `endpoint`, `repr()` and `as_uri()`
+        (default: the peer address of `connection`; `ValueError` when it has
+        none, as through a tunnel); `port` is the peer port and `user` the
+        connection's login name. `max_concurrency`, `sftp_version` and
+        `timeout` are those of the constructor. `TypeError` when
+        `connection` is not an `asyncssh.SSHClientConnection` or `loop` not
+        an event loop, `ValueError` when `connection` is bound to another
+        loop."""
+        if not isinstance(connection, _asyncssh.SSHClientConnection):
+            raise TypeError(
+                "connection must be an asyncssh.SSHClientConnection, not "
+                f"{type(connection).__name__}"
+            )
+        if not isinstance(loop, _asyncio.AbstractEventLoop):
+            raise TypeError(
+                f"loop must be an asyncio event loop, not {type(loop).__name__}"
+            )
+        # asyncssh keeps the loop a connection was made on as `_loop`; a
+        # request scheduled on any other loop would touch it from two threads.
+        if getattr(connection, "_loop", loop) is not loop:
+            raise ValueError("connection is bound to another event loop than loop")
+        peer = connection.get_extra_info("peername")
+        port = None
+        if isinstance(peer, tuple) and len(peer) >= 2:
+            port = peer[1] or None
+            if host is None:
+                host = peer[0] or None
+        if not host:
+            raise ValueError(
+                "the connection has no peer address to name the server: pass host="
+            )
+        backend = cls.__new__(cls)
+        AsyncSSHBackend.__init__(
+            backend,
+            host,
+            port,
+            user=connection.get_extra_info("username") or None,
+            max_concurrency=max_concurrency,
+            sftp_version=sftp_version,
+            timeout=timeout,
+        )
+        backend._connection = connection
+        backend._caller = _bridge._CallerLoop(loop)
+        return backend
 
     @property
     def endpoint(self) -> SFTPEndpoint:
@@ -121,6 +202,11 @@ class AsyncSSHBackend(_checkfile.CheckFileSFTPBackend):
         return f"{type(self).__name__}({', '.join(shown)})"
 
     def __reduce__(self):
+        if self._connection is not None:
+            raise TypeError(
+                f"an {type(self).__name__} over a caller's connection cannot be "
+                "pickled: the connection belongs to this process"
+            )
         # `connect_opts` already holds the ssh_config as `config`.
         return (
             _rebuild_backend,
@@ -141,27 +227,39 @@ class AsyncSSHBackend(_checkfile.CheckFileSFTPBackend):
 
     def client(self) -> _SyncSFTPClient:
         try:
-            entry = _CACHE.get_or_create(
-                (self,),
-                lambda: _bridge._run(
-                    _aconnect(
-                        self.host,
-                        self.port,
-                        self.user,
-                        self.password,
-                        connect_opts=self.connect_opts,
-                        sftp_version=self.sftp_version,
-                        timeout=self.timeout,
-                    ),
-                    self.timeout,
-                ),
-            )
+            entry = _CACHE.get_or_create((self,), self._open_entry)
         except _asyncssh.Error as error:
+            connection = self._connection
+            if connection is not None and connection.is_closed():
+                raise _errors.connection_closed() from None
             raise _transport_error(error, self.endpoint) from None
         return entry.client
 
+    def _open_entry(self):
+        if self._connection is not None:
+            return _bridge._run(
+                _aopen_on(
+                    self._connection, self.sftp_version, self.timeout, self._caller
+                ),
+                self.timeout,
+                self._caller,
+            )
+        return _bridge._run(
+            _aconnect(
+                self.host,
+                self.port,
+                self.user,
+                self.password,
+                connect_opts=self.connect_opts,
+                sftp_version=self.sftp_version,
+                timeout=self.timeout,
+            ),
+            self.timeout,
+        )
+
     def close(self) -> None:
-        """Close every cached connection this backend opened."""
+        """Close every cached connection this backend opened; over a caller's
+        connection, the SFTP channel opened on it."""
         _CACHE.close_backend(self)
 
     def _check_file_request(
@@ -183,6 +281,7 @@ class AsyncSSHBackend(_checkfile.CheckFileSFTPBackend):
                 aclient=path._sftpclient._aclient,
             ),
             None,
+            self._caller,
         )
 
     def tree_copy(
@@ -209,4 +308,5 @@ class AsyncSSHBackend(_checkfile.CheckFileSFTPBackend):
                 aclient=path._sftpclient._aclient,
             ),
             None,
+            self._caller,
         )

@@ -342,6 +342,11 @@ class AsyncSSHBackend(CheckFileSFTPBackend):
         self, host, port=None, *, user=None, password=None, connect_opts=None,
         max_concurrency=None, sftp_version=4, ssh_config=..., timeout=60.0,
     ) -> None: ...
+    @classmethod
+    def over_connection(
+        cls, connection, loop, *, host=None, max_concurrency=None,
+        sftp_version=4, timeout=60.0,
+    ) -> AsyncSSHBackend: ...
 ```
 
 A backend is the connections to one SFTP server and account; its `endpoint`
@@ -410,6 +415,39 @@ name from the user's ssh_config.
   applies permission bits as `Path.copy()` does, `rm()`'s `missing_ok` covers
   the path it was called on only, and `ignore_error` is offered each error
   once.
+- **`AsyncSSHBackend.over_connection(connection, loop)`** runs SFTP over an
+  `asyncssh.SSHClientConnection` the caller has already opened and
+  authenticated, instead of connecting: the backend opens its SFTP channel on
+  that connection (`start_sftp_client()`) at the first request, so no second
+  login is made, and runs every request on `loop`, the running event loop the
+  connection is bound to, not on this package's loop thread. Paths, the
+  `sftp:` scheme, the native walks (their callbacks run in `loop`'s default
+  executor), the timeout, cancellation and errors are those above. Several
+  backends may share one connection, each with its own channel.
+  - **Lifetime.** The connection stays the caller's: the backend never
+    closes it. `close()` (and leaving `with`) closes only the backend's
+    SFTP channel; the next request opens another on the same connection.
+    Once the connection is closed (by its owner or the server), every
+    request, the first one included, raises `ConnectionResetError` and
+    none waits for a timeout; a request in flight when it closes raises the
+    same.
+  - **The loop.** `loop` must keep running while the backend is used: a
+    request made while it is closed or stopped, or waiting when it stops,
+    raises `RuntimeError` (a wait checks every half second), as does a sync
+    call made on the thread running `loop` (it would deadlock it). It is
+    never stopped or closed by the backend.
+  - **Fork.** Not fork-safe: in a `fork()`ed child every request raises
+    `RuntimeError`; build a new backend there over a connection the child
+    opened. Such a backend cannot be pickled, and neither can a path on it
+    (`TypeError`); `copy.copy` and `copy.deepcopy` of a path share it.
+  - **Arguments.** `host` names the server in `endpoint`, `repr()` and
+    `as_uri()` (default the connection's peer address; `ValueError` when it
+    has none, as through a tunnel or once closed); `port` is the peer port,
+    `user` the connection's login name, `password` `None`. `max_concurrency`,
+    `sftp_version` and `timeout` are the constructor's. `TypeError` when
+    `connection` is not an `SSHClientConnection` or `loop` not an event loop,
+    `ValueError` when the connection is bound to another loop. Nothing is
+    sent when it is built.
 
 ## The `sftp:` scheme (`sftppath.uri`, `uri` extra)
 
@@ -512,6 +550,7 @@ the life of the process.
 - Both libraries connect lazily and cache the connection; a program that opens
   many backends should `close()` them (or use `with`).
 - `AsyncSSHBackend` runs on one shared loop thread: do not call a path method
-  from a callback that runs on it.
+  from a callback that runs on it. A backend from `over_connection()` runs on
+  the caller's loop instead, with the same rule for that loop.
 - `known_hosts=None` / `AutoAddPolicy` turn host-key verification off; the
   password is then sent to whoever answers.

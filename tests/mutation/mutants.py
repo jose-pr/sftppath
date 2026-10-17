@@ -177,10 +177,67 @@ mutant(
 mutant(
     "asyncssh-timed-out-request-keeps-running",
     "_asyncssh/_loop.py",
-    "        loop.call_soon_threadsafe(lambda: started[0].cancel())\n",
-    "        pass\n",
-    "tests/test_sftp_native_walk.py::test_walk_that_timed_out_has_stopped",
-    "a request that timed out keeps running on the bridge loop",
+    "            loop.call_soon_threadsafe(lambda: started[0].cancel())\n",
+    "            pass\n",
+    (
+        "tests/test_sftp_native_walk.py::test_walk_that_timed_out_has_stopped",
+        "tests/test_sftp_over_connection.py::test_run_on_a_callers_loop_cancels_on_timeout",
+    ),
+    "a request that timed out keeps running on its loop",
+)
+
+mutant(
+    "asyncssh-over-connection-closes-the-callers-connection",
+    "_asyncssh/_cache.py",
+    "    if not entry.owned:\n",
+    "    if False:\n",
+    "tests/test_sftp_over_connection.py::test_the_backend_never_closes_the_callers_connection",
+    "closing a backend over a caller's connection closes that connection",
+)
+
+mutant(
+    "asyncssh-over-connection-waits-on-a-stopped-loop",
+    "_asyncssh/_loop.py",
+    "            if caller.loop.is_closed() or not caller.loop.is_running():\n                raise _LoopStopped() from None\n",
+    "            if False:\n                raise _LoopStopped() from None\n",
+    "tests/test_sftp_over_connection.py::test_a_wait_on_a_loop_that_stops_raises_instead_of_hanging",
+    "a request waiting on a caller's loop that stops is never answered and hangs",
+)
+
+mutant(
+    "asyncssh-over-connection-used-after-fork",
+    "_asyncssh/_loop.py",
+    "    if caller.pid != _os.getpid():\n",
+    "    if False:\n",
+    "tests/test_sftp_over_connection.py::test_a_backend_over_a_connection_is_refused_after_fork",
+    "a forked child sends requests to a loop whose thread it does not have",
+)
+
+mutant(
+    "asyncssh-over-connection-blocks-its-own-loop",
+    "_asyncssh/_loop.py",
+    "    return _running_loop() is caller.loop\n",
+    "    return False\n",
+    "tests/test_sftp_over_connection.py::test_a_sync_call_on_the_callers_loop_thread_raises",
+    "a sync call on the thread running the caller's loop deadlocks it",
+)
+
+mutant(
+    "asyncssh-over-connection-accepts-another-loop",
+    "_asyncssh/_backend.py",
+    '        if getattr(connection, "_loop", loop) is not loop:\n',
+    "        if False:\n",
+    "tests/test_sftp_over_connection.py::test_arguments_are_checked",
+    "a connection is accepted with a loop it is not bound to",
+)
+
+mutant(
+    "asyncssh-over-connection-pickles",
+    "_asyncssh/_backend.py",
+    "        if self._connection is not None:\n            raise TypeError(\n",
+    "        if False:\n            raise TypeError(\n",
+    "tests/test_sftp_over_connection.py::test_a_backend_over_a_connection_does_not_pickle",
+    "a backend over a caller's connection pickles into one that connects and logs in itself",
 )
 
 mutant(

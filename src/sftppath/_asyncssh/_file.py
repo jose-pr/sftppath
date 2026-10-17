@@ -37,10 +37,12 @@ class _SyncSFTPFile(_io.RawIOBase):
         timeout: "float | None" = _bridge._UNSET_TIMEOUT,
         mode: str = "r+",
         filename: "str | None" = None,
+        caller: "_bridge._CallerLoop | None" = None,
     ):
         super().__init__()
         self._afile = afile
         self._timeout = timeout
+        self._caller = caller
         self._filename = filename
         self._readable = "r" in mode or "+" in mode
         self._writable = any(kind in mode for kind in "wxa+")
@@ -49,7 +51,7 @@ class _SyncSFTPFile(_io.RawIOBase):
         # read() carries whole payloads (read_bytes() is one read(-1)), so its
         # duration grows with the data: no wall-clock bound.
         try:
-            data = _bridge._run(self._afile.read(size), None)
+            data = _bridge._run(self._afile.read(size), None, self._caller)
         except _asyncssh.Error as error:
             translated = _library_error(error)
             # OpenSSH opens a directory for reading and fails the read with a
@@ -71,7 +73,7 @@ class _SyncSFTPFile(_io.RawIOBase):
         """Whether the server says this handle is a directory: one fstat,
         asked only after a read came back empty or failed."""
         try:
-            attrs = _bridge._run(self._afile.stat(), self._timeout)
+            attrs = _bridge._run(self._afile.stat(), self._timeout, self._caller)
         except (_asyncssh.Error, OSError):
             return False
         return _stat.S_ISDIR(_StatAdapter(attrs).st_mode)
@@ -92,22 +94,24 @@ class _SyncSFTPFile(_io.RawIOBase):
 
     @_reraise_sftp_errors
     def write(self, data: bytes) -> int:
-        return _bridge._run(self._afile.write(bytes(data)), None)
+        return _bridge._run(self._afile.write(bytes(data)), None, self._caller)
 
     @_reraise_sftp_errors
     def truncate(self, size: "int | None" = None) -> int:
         if size is None:
             size = self.tell()
-        _bridge._run(self._afile.truncate(size), self._timeout)
+        _bridge._run(self._afile.truncate(size), self._timeout, self._caller)
         return size
 
     @_reraise_sftp_errors
     def seek(self, offset: int, whence: int = 0) -> int:
-        return _bridge._run(self._afile.seek(offset, whence), self._timeout)
+        return _bridge._run(
+            self._afile.seek(offset, whence), self._timeout, self._caller
+        )
 
     @_reraise_sftp_errors
     def tell(self) -> int:
-        return _bridge._run(self._afile.tell(), self._timeout)
+        return _bridge._run(self._afile.tell(), self._timeout, self._caller)
 
     def close(self) -> None:
         if self.closed:
@@ -117,12 +121,13 @@ class _SyncSFTPFile(_io.RawIOBase):
                 # The loop thread cannot run any more; the server releases
                 # the handle when the connection drops.
                 pass
-            elif _bridge._on_loop_thread():
+            elif _bridge._on_loop(self._caller):
                 # A finalizer can run here; closing must not block the loop.
-                _bridge._loop.create_task(self._afile.close())
+                loop = _bridge._loop if self._caller is None else self._caller.loop
+                loop.create_task(self._afile.close())
             else:
                 try:
-                    _bridge._run(self._afile.close(), self._timeout)
+                    _bridge._run(self._afile.close(), self._timeout, self._caller)
                 except _asyncssh.Error as error:
                     raise _library_error(error) from None
         finally:

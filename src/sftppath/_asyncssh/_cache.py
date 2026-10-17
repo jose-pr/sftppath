@@ -22,6 +22,9 @@ if _ty.TYPE_CHECKING:
 class _ConnectionEntry(_ty.NamedTuple):
     conn: "_asyncssh.SSHClientConnection"
     client: "_SyncSFTPClient"
+    #: False for a connection the caller handed over: only the SFTP channel
+    #: opened on it is closed here, never the connection.
+    owned: bool = True
 
 
 async def _aclose_entry(entry: "_ConnectionEntry") -> None:
@@ -30,6 +33,8 @@ async def _aclose_entry(entry: "_ConnectionEntry") -> None:
         await entry.client._aclient.wait_closed()
     except Exception:
         pass
+    if not entry.owned:
+        return
     entry.conn.close()
     try:
         await entry.conn.wait_closed()
@@ -50,7 +55,7 @@ def _entry_is_alive(entry: "_ConnectionEntry") -> bool:
 def _close_entries(entries: "_ty.Iterable[_ConnectionEntry]") -> None:
     for entry in entries:
         try:
-            _bridge._run(_aclose_entry(entry))
+            _bridge._run(_aclose_entry(entry), caller=entry.client._caller)
         except Exception:
             pass
 

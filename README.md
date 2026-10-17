@@ -28,6 +28,9 @@ paramiko or asyncssh, and needs no URI. It builds on
   listing, walk, file reads and writes, `mkdir`, `unlink`, `rename`, recursive
   `copy()` and recursive `rm()` are asyncssh requests on your loop, not on a
   worker thread (it needs `pathapi>=0.1.2`).
+- **Your own connection**: `AsyncSSHBackend.over_connection(connection, loop)`
+  runs SFTP over an asyncssh connection your program already opened, on the
+  event loop that owns it, without logging in again.
 - **ssh_config**: `HostName`, `Port`, `User`, `IdentityFile`, `ProxyCommand` and
   `Include` apply to the host you name; host keys are verified.
 - **Server-side checksums**: `checksum()` uses the `check-file-handle`

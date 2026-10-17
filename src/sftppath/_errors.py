@@ -81,6 +81,14 @@ def lost() -> ConnectionResetError:
     return ConnectionResetError(_errno.ECONNRESET, "SFTP connection lost")
 
 
+def connection_closed() -> ConnectionResetError:
+    """The connection a backend was handed is closed, by its owner or by the
+    server; the backend cannot open another."""
+    return ConnectionResetError(
+        _errno.ECONNRESET, "the SSH connection the SFTP backend runs over is closed"
+    )
+
+
 def aborted(library_error: BaseException) -> ConnectionAbortedError:
     """The SSH handshake or session failed for a reason other than a login or
     a host key; only the name of the library's exception is carried over, and
