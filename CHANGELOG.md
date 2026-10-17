@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-17
+
 ### Added
 
 - **`AsyncSSHBackend.over_connection(connection, loop, *, host=None,
@@ -156,7 +158,8 @@ name `pathlib_next`); the old names below are the ones before the move.
 - An error that has a file name and no second one prints only the first; it
   printed `-> None` after it.
 
-[Unreleased]: https://github.com/jose-pr/sftppath/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/jose-pr/sftppath/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/jose-pr/sftppath/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/jose-pr/sftppath/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/jose-pr/sftppath/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jose-pr/sftppath/releases/tag/v0.1.0
